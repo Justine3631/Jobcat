@@ -1,6 +1,6 @@
 export const STAGES = ['待判断', '准备中', '已沟通／已申请', '测评／面试中', 'Offer', '已入职', '已结束'];
 export const DIRECTIONS = ['产品', 'AI 应用', '业务分析', '解决方案', '财务数字化', '会计财务', '其他'];
-export const DECISIONS = ['未决定', '推进', '保留观察', '不考虑'];
+export const DECISIONS = ['未决定', '推进', '保留观察', '暂缓', '不考虑'];
 export const RECOMMENDATIONS = ['优先核实', '可以尝试', '补信息后再判断', '暂不优先'];
 export function recommendation(job) {
   const value = job.analyses.at(-1)?.recommendation;
@@ -12,9 +12,11 @@ export function cityGroup(value = '') {
   return city ? city[1] : '地点待确认';
 }
 export function todayActions(jobs, date) {
-  return jobs.filter(j=>!j.archived && !['已结束','已入职'].includes(j.stage) && j.nextAction && j.nextDate && j.nextDate <= date)
+  return jobs.filter(j=>needsFollowUp(j) && j.nextAction && j.nextDate && j.nextDate <= date)
     .sort((a,b)=>a.nextDate.localeCompare(b.nextDate));
 }
+export const needsFollowUp = job => !job.archived && !['暂缓','不考虑'].includes(job.decision) && !['已结束','已入职'].includes(job.stage);
+export const awaitingDecision = job => needsFollowUp(job) && job.decision==='未决定';
 export const ACTIVITY_TYPES = ['沟通', '发送简历', '正式投递', '招聘方回复', '笔试／作业', 'Offer', '备注'];
 export const uid = () => crypto.randomUUID();
 export const now = () => new Date().toISOString();
@@ -53,6 +55,12 @@ export function addActivity(job, activity) {
   if (target > STAGES.indexOf(next.stage) && next.stage !== '已结束') next.stage = STAGES[target];
   return next;
 }
+export function setDeferred(job, deferred) {
+  if((job.decision==='暂缓')===deferred)return job;
+  const decision=deferred?'暂缓':(DECISIONS.includes(job.decisionBeforeDefer)&&job.decisionBeforeDefer!=='暂缓'?job.decisionBeforeDefer:'未决定');
+  return updateJob(job,{decision,decisionBeforeDefer:deferred?job.decision:'',activities:[...job.activities,
+    {id:uid(),type:'备注',date:now(),text:deferred?'暂缓跟进：保留原有阶段和记录，暂停今日行动提醒。':'恢复跟进：保留原有阶段，恢复此前的个人决定。',materialIds:[]}]});
+}
 export function saveInterview(job, interview) {
   const previous = job.interviews.find(x => x.id === interview.id);
   const interviews = previous ? job.interviews.map(x => x.id === interview.id ? interview : x) : [...job.interviews, interview];
@@ -65,7 +73,7 @@ export function saveInterview(job, interview) {
 export function duplicates(jobs, fields, excludeId) {
   const normal = v => (typeof v==='string'?v:'').trim().toLocaleLowerCase().replace(/\s+/g,'');
   const link = fields.url?.trim();
-  return jobs.filter(j => j.id !== excludeId && !j.archived && (
+  return jobs.filter(j => j.id !== excludeId && (
     (link && j.sources.some(s => s.url === link)) ||
     (normal(fields.company) && normal(j.company) === normal(fields.company) && normal(j.title) === normal(fields.title) && normal(j.city) === normal(fields.city))));
 }
@@ -131,7 +139,7 @@ export function previewDraft(payload, state) {
     if (typeof item.title !== 'string' || !item.title.trim()) throw Error('新机会草稿需要岗位名称');
     const dup = duplicates([...state.jobs,...seen], item);
     seen.push(makeJob({title:item.title,company:typeof item.company==='string'?item.company:'',city:typeof item.city==='string'?item.city:'',sources:typeof item.url==='string'?[{url:item.url}]:[]}));
-    return {index, item, job: null, conflict: dup.length ? '可能与已有机会重复，取消勾选后可手动核对' : '', title: item.title, selected: !dup.length};
+    return {index, item, job: null, conflict: dup.length ? `可能与已有机会重复${dup.some(j=>j.archived)?'（含已归档机会）':''}，请先核对原记录` : '', title: item.title, selected: !dup.length};
   });
 }
 export function applyDraft(state, rows) {

@@ -1,5 +1,8 @@
 """Jobcat local workspace. Run: python3 server.py"""
 import argparse
+import base64
+from contextlib import closing
+from datetime import datetime
 import json
 import sqlite3
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -18,27 +21,109 @@ def initial_state():
 
 
 def validate_state(state):
-    if not isinstance(state, dict) or state.get("schemaVersion") != 1:
-        raise ValueError("不支持的数据格式")
-    for key in ("jobs", "materials", "experiences"):
-        items = state.get(key)
-        if not isinstance(items, list):
-            raise ValueError(f"{key} 必须是列表")
-        ids = [x.get("id") if isinstance(x, dict) else None for x in items]
-        if any(not isinstance(i, str) or not i for i in ids) or len(ids) != len(set(ids)):
-            raise ValueError(f"{key} 包含无效或重复 ID")
-    if not isinstance(state.get("preferences"), dict):
-        raise ValueError("缺少求职偏好")
+    def fail(path, message):
+        raise ValueError(f"{path}：{message}")
+
+    def records(value, path):
+        if not isinstance(value, list):
+            fail(path, '必须是列表')
+        if any(not isinstance(item, dict) for item in value):
+            fail(path, '记录必须是对象')
+        return value
+
+    def collection(key):
+        rows = records(state.get(key), key)
+        ids = [row.get('id') for row in rows]
+        if any(not isinstance(i, str) or not i for i in ids) or len(set(ids)) != len(ids):
+            fail(key, '包含无效或重复ID')
+        return rows
+
+    def strings(row, keys, path, required=False):
+        for key in keys:
+            if (required or key in row) and not isinstance(row.get(key), str):
+                fail(f'{path}.{key}', '必须是文字')
+
+    def dates(row, keys, path):
+        for key in keys:
+            value = row.get(key)
+            if value:
+                try:
+                    datetime.fromisoformat(value.replace('Z', '+00:00'))
+                except (ValueError, AttributeError, TypeError):
+                    fail(f'{path}.{key}', '日期无效')
+
+    def references(value, known, path):
+        if not isinstance(value, list) or any(not isinstance(i, str) or i not in known for i in value):
+            fail(path, '包含丢失的记录关联')
+
+    if not isinstance(state, dict) or type(state.get('schemaVersion')) is not int or state.get('schemaVersion') != 1:
+        raise ValueError('不支持的数据格式')
+    if not isinstance(state.get('preferences'), dict):
+        raise ValueError('缺少求职偏好')
+    state.setdefault('searchRequests', [])
+    jobs, materials, experiences, requests = [collection(k) for k in ('jobs', 'materials', 'experiences', 'searchRequests')]
+    job_ids, material_ids = {j['id'] for j in jobs}, {m['id'] for m in materials}
+    for index, request in enumerate(requests):
+        path = f'searchRequests[{index}]'
+        strings(request, ('title','directions','cities','salary','channels','notes','status','report','createdAt','updatedAt'), path, True)
+        dates(request, ('createdAt','updatedAt'), path)
+        references(request.get('resultIds'), job_ids, path + '.resultIds')
+    for index, material in enumerate(materials):
+        path = f'materials[{index}]'
+        strings(material, ('name','text'), path, True)
+        attachment = material.get('file')
+        if attachment is not None:
+            if not isinstance(attachment, dict):
+                fail(path + '.file', '附件格式无效')
+            strings(attachment, ('name','data'), path + '.file', True)
+            try:
+                prefix, payload = attachment['data'].split(',', 1)
+                if not prefix.startswith('data:') or not prefix.endswith(';base64'):
+                    raise ValueError()
+                base64.b64decode(payload, validate=True)
+            except (ValueError, TypeError):
+                fail(path + '.file', '附件编码无效')
+    for index, experience in enumerate(experiences):
+        strings(experience, ('title','text'), f'experiences[{index}]', True)
     validate_resumes(state)
-    stages = {"待判断", "准备中", "已沟通／已申请", "测评／面试中", "Offer", "已入职", "已结束"}
-    for job in state["jobs"]:
-        if not isinstance(job.get("title"), str) or not job["title"].strip():
-            raise ValueError("岗位名称不能为空")
-        if job.get("stage") not in stages or not isinstance(job.get("revision"), int):
-            raise ValueError("岗位阶段或版本无效")
-        for key in ("sources", "jdVersions", "activities", "interviews", "analyses", "materialIds"):
-            if not isinstance(job.get(key), list):
-                raise ValueError(f"岗位缺少 {key}")
+    for index, template in enumerate(state.get('resumeTemplates', [])):
+        if not isinstance(template.get('slots'), list):
+            fail(f'resumeTemplates[{index}].slots', '缺少文字段落')
+        for slot in records(template['slots'], f'resumeTemplates[{index}].slots'):
+            strings(slot, ('key','text','section'), '简历段落', True)
+            if type(slot.get('heading')) is not bool:
+                fail('简历段落.heading', '标题标记无效')
+    stages = {'待判断','准备中','已沟通／已申请','测评／面试中','Offer','已入职','已结束'}
+    for index, job in enumerate(jobs):
+        path = f'jobs[{index}]'
+        if not isinstance(job.get('title'), str) or not job['title'].strip():
+            fail(path + '.title', '岗位名称不能为空')
+        if job.get('stage') not in stages or type(job.get('revision')) is not int:
+            fail(path, '岗位阶段或版本无效')
+        if 'focus' in job and type(job['focus']) is not bool:
+            fail(path + '.focus', '重点标记无效')
+        strings(job, ('company','city','direction','salary','hiring','decision','reason','concerns','questions','nextAction','nextDate','closeReason','offerType','offerNotes','createdAt','updatedAt','userReason','userConcerns','userQuestions','keyRequirement','jdCompleteness'), path)
+        dates(job, ('createdAt','updatedAt','nextDate'), path)
+        for key in ('sources','jdVersions','activities','interviews','analyses'):
+            records(job.get(key), path + '.' + key)
+        references(job.get('materialIds'), material_ids, path + '.materialIds')
+        for source in job['sources']:
+            strings(source, ('platform','url'), path + '.sources', True)
+        for version in job['jdVersions']:
+            strings(version, ('id','text'), path + '.jdVersions', True)
+            dates(version, ('date',), path + '.jdVersions')
+        for activity in job['activities']:
+            strings(activity, ('type','text','date'), path + '.activities', True)
+            dates(activity, ('date',), path + '.activities')
+            references(activity.get('materialIds'), material_ids, path + '.activities.materialIds')
+        for interview in job['interviews']:
+            strings(interview, ('id','round'), path + '.interviews', True)
+            if interview.get('status') not in ('待进行','已完成','已取消'):
+                fail(path + '.interviews.status', '面试状态无效')
+            dates(interview, ('date',), path + '.interviews')
+        for analysis in job['analyses']:
+            strings(analysis, ('id','text'), path + '.analyses', True)
+            dates(analysis, ('date',), path + '.analyses')
 
 
 class Workspace:
@@ -59,9 +144,13 @@ class Workspace:
             revision, body = conn.execute("SELECT revision, body FROM workspace WHERE id=1").fetchone()
             return {"revision": revision, "state": json.loads(body)}
 
+    def revision(self):
+        with closing(self.connect()) as conn:
+            return conn.execute("SELECT revision FROM workspace WHERE id=1").fetchone()[0]
+
     def write(self, expected, state):
         validate_state(state)
-        body = json.dumps(state, ensure_ascii=False)
+        body = json.dumps(state, ensure_ascii=False, allow_nan=False)
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             revision, previous = conn.execute("SELECT revision, body FROM workspace WHERE id=1").fetchone()
@@ -95,6 +184,8 @@ def handler_for(workspace):
         def do_GET(self):
             if urlsplit(self.path).path == "/api/state":
                 self.respond(200, workspace.read())
+            elif urlsplit(self.path).path == "/api/revision":
+                self.respond(200, {"revision": workspace.revision()})
             else:
                 super().do_GET()
 
@@ -113,6 +204,8 @@ def handler_for(workspace):
                 if not 0 < length <= MAX_BODY:
                     raise ValueError('请求大小无效')
                 payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('请求必须是JSON对象')
                 if self.path == '/api/resume-template':
                     self.respond(200, {'slots': slots(template_bytes(payload))})
                     return

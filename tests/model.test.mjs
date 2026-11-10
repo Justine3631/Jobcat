@@ -1,6 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {makeJob,updateJob,addActivity,saveInterview,duplicates,stats,previewDraft,applyDraft,validateState} from '../web/model.mjs';
+import {makeJob,updateJob,addActivity,saveInterview,duplicates,stats,previewDraft,applyDraft,validateState,setDeferred,todayActions,needsFollowUp,awaitingDecision} from '../web/model.mjs';
+
+test('declined and deferred jobs do not prompt follow-up; real interview records stay intact',()=>{
+  for(const decision of ['不考虑','暂缓']){
+    const job=makeJob({title:'运营',decision,stage:'已沟通／已申请',nextAction:'联系',nextDate:'2026-11-01',interviews:[{id:'one',status:'待进行'}]});
+    assert.equal(needsFollowUp(job),false);
+    assert.deepEqual(todayActions([job],'2026-11-10'),[]);
+    assert.equal(job.interviews.length,1);
+  }
+  assert.equal(awaitingDecision(makeJob({title:'已沟通但未决定',stage:'已沟通／已申请'})),true);
+  assert.equal(awaitingDecision(makeJob({title:'已结束',stage:'已结束'})),false);
+});
+
+test('archived matches prevent a new duplicate draft without affecting different roles',()=>{
+  const job=makeJob({title:'运营',company:'同一公司',city:'深圳',archived:true,sources:[{url:'https://example.com/job/1'}],activities:[{type:'正式投递',materialIds:[]}]});
+  assert.equal(duplicates([job],{url:'https://example.com/job/1'}).length,1);
+  assert.equal(duplicates([job],{title:'运营',company:'同一公司',city:'深圳'}).length,1);
+  assert.equal(duplicates([job],{title:'产品',company:'同一公司',city:'深圳'}).length,0);
+  const rows=previewDraft({kind:'jobcat-ai-draft',schemaVersion:1,items:[{title:'运营',url:'https://example.com/job/1'}]},workspace([job]));
+  assert.equal(rows[0].selected,false);
+  assert.match(rows[0].conflict,/已归档/);
+  assert.equal(stats([job]).applied,1);
+});
+
+test('deferring suppresses actions, preserves progress and restores the previous decision',()=>{
+  const job=makeJob({title:'运营助理',decision:'推进',stage:'已沟通／已申请',nextAction:'准备材料',nextDate:'2026-11-10',materialIds:['cv'],activities:[{id:'sent',type:'正式投递',materialIds:['cv']}],interviews:[{id:'one',status:'待进行'}]});
+  const paused=setDeferred(job,true);
+  assert.equal(paused.decision,'暂缓');
+  assert.equal(paused.stage,job.stage);
+  assert.deepEqual(paused.materialIds,job.materialIds);
+  assert.deepEqual(paused.interviews,job.interviews);
+  assert.deepEqual(todayActions([paused],'2026-11-10'),[]);
+  assert.equal(stats([paused]).applied,1);
+  assert.equal(setDeferred(paused,true),paused);
+  const resumed=setDeferred(paused,false);
+  assert.equal(resumed.decision,'推进');
+  assert.equal(resumed.stage,job.stage);
+  assert.equal(todayActions([resumed],'2026-11-10').length,1);
+  assert.equal(resumed.activities.length,3);
+});
 
 const workspace=jobs=>({schemaVersion:1,jobs,materials:[],experiences:[],preferences:{}});
 test('capture with only JD creates an identifiable title',()=>{

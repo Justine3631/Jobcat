@@ -1,5 +1,5 @@
 import {resumeView,resumeAction,importResume,saveResume} from './resumes.mjs';
-import {STAGES,DIRECTIONS,DECISIONS,RECOMMENDATIONS,recommendation,cityGroup,todayActions,ACTIVITY_TYPES,uid,now,localDate,clone,makeJob,updateJob,addActivity,saveInterview,duplicates,stats,validateState,previewDraft,applyDraft,demoState} from './model.mjs';
+import {STAGES,DIRECTIONS,DECISIONS,RECOMMENDATIONS,recommendation,cityGroup,todayActions,needsFollowUp,awaitingDecision,setDeferred,ACTIVITY_TYPES,uid,now,localDate,clone,makeJob,updateJob,addActivity,saveInterview,duplicates,stats,validateState,previewDraft,applyDraft,demoState} from './model.mjs';
 
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -35,19 +35,20 @@ const badge = (text,cls='') => `<span class="badge ${cls}">${esc(text)}</span>`;
 const formatDate = v => v ? new Intl.DateTimeFormat('zh-CN',{month:'short',day:'numeric',hour: v.includes('T')?'2-digit':undefined,minute:v.includes('T')?'2-digit':undefined}).format(new Date(v.includes('T')?v:`${v}T00:00:00`)) : '未设日期';
 const fullDate = v => v ? new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Shanghai'}).format(new Date(v)).replaceAll('/','-') : '未记录';
 const safeUrl = value => {try {const u = new URL(value); return ['http:','https:'].includes(u.protocol) ? u.href : null;}catch{return null;}};
-let state, revision, savedState, demo=false, busy=false, view='today', mode='list', search='', filterDirection='', filterCity='', filterStage='', filterRecommendation='', focusOnly=false, archived=false;
+let state, revision, savedState, demo=false, busy=false, view='today', mode='list', search='', filterDirection='', filterCity='', filterStage='', filterDecision='', filterRecommendation='', focusOnly=false, pendingOnly=false, archived=false;
 let selectedJob=null, detailTab='overview', dialog=null, importRows=[], restoreData=null, focusBefore;
 const selected = new Set();
 let toastTimer;
 async function checkForUpdates(){
   if(!state||demo||busy||document.hidden)return;
-  try{const res=await fetch('/api/state');if(!res.ok)return;const fresh=await res.json();if(fresh.revision!==revision){if(!$('#update-notice'))$('#app').insertAdjacentHTML('beforeend',`<div id="update-notice" role="status">有新记录可更新。当前输入会保留，保存或取消后再更新。${btn('更新记录','refresh-state','primary')}</div>`);}}catch{}
+  try{const res=await fetch('/api/revision');if(!res.ok)return;const fresh=await res.json();if(fresh.revision!==revision){if(!$('#update-notice'))$('#app').insertAdjacentHTML('beforeend',`<div id="update-notice" role="status">有新记录可更新。当前输入会保留，保存或取消后再更新。${btn('更新记录','refresh-state','primary')}</div>`);}}catch{}
 }
 window.addEventListener('focus',checkForUpdates);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkForUpdates();});
 setInterval(checkForUpdates,45000);
+function updateSaveStatus(){const target=$('footer .footer-right');if(target&&!demo)target.textContent=$('#overlay form[data-dirty="yes"], #preferences-form[data-dirty="yes"], #resume-form[data-dirty="yes"]')?'本机工作区 · 有未保存修改':'本机工作区 · 已保存';}
 function toast(message,error=false) { $('#toast').textContent=message; $('#toast').className=`visible ${error?'error':''}`; clearTimeout(toastTimer); toastTimer=setTimeout(()=>$('#toast').className='',4500); }
-async function commit(next) {
+async function commit(next,{renderView=true}={}) {
   if(busy) throw Error('正在保存，请稍候');
   busy=true; document.body.classList.add('saving');
   try {
@@ -59,7 +60,7 @@ async function commit(next) {
     }
     state=next;
     toast(demo?'已更新示例，未写入正式记录':'已保存到本机');
-    render();
+    if(renderView)render();
   } finally {busy=false; document.body.classList.remove('saving');}
 }
 async function changeJob(id, transform) {
@@ -71,7 +72,7 @@ const activeJobs = () => state.jobs.filter(j=>!j.archived);
 const getJob = () => state.jobs.find(j=>j.id===selectedJob);
 function stageClass(stage) {return stage==='Offer'?'gold':stage==='已结束'?'muted':stage==='测评／面试中'?'green':stage==='已入职'?'green':'neutral';}
 function visibleJobs() {
-  return state.jobs.filter(j=>Boolean(j.archived)===archived && (!search || [j.title,j.company,j.city,j.salary,j.reason].join(' ').toLowerCase().includes(search.toLowerCase())) && (!filterDirection||j.direction===filterDirection) && (!filterCity||cityGroup(j.city)===filterCity) && (!filterStage||j.stage===filterStage) && (!filterRecommendation||recommendation(j)===filterRecommendation) && (!focusOnly||j.focus)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
+  return state.jobs.filter(j=>Boolean(j.archived)===archived && (!pendingOnly||awaitingDecision(j)) && (!search || [j.title,j.company,j.city,j.salary,j.reason].join(' ').toLowerCase().includes(search.toLowerCase())) && (!filterDirection||j.direction===filterDirection) && (!filterCity||cityGroup(j.city)===filterCity) && (!filterStage||j.stage===filterStage) && (!filterDecision||j.decision===filterDecision) && (!filterRecommendation||recommendation(j)===filterRecommendation) && (!focusOnly||j.focus)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
 }
 function header(eyebrow,title,subtitle,actions='') {
   return `<header class="page-header"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${subtitle}</p></div><div class="header-actions">${actions}${btn('更新记录','refresh-state','text')}${btn(icon('settings'),'settings','mobile-settings','aria-label="偏好与数据"')}</div></header>`;
@@ -88,24 +89,25 @@ function render() {
     <div class="sidebar-bottom"><button class="nav-item ${view==='settings'?'active':''}" data-action="nav" data-view="settings">${icon('settings')}<span>偏好与数据</span></button><div class="user"><span class="avatar">佳</span><div>我的工作区<small><span class="status-dot"></span>${demo?'示例体验中':'数据保存在本机'}</small></div></div></div></aside>
     <main>${demo?`<div class="demo-banner"><span>示例模式 · 公司与机会均为虚构，修改不写入正式记录。</span>${btn('退出示例','exit-demo','plain')}</div>`:''}<div class="content">${view==='today'?todayView():view==='jobs'?jobsView():view==='search'?searchView():view==='resumes'?resumeView(state):view==='materials'?materialsView():view==='review'?reviewView():settingsView()}</div><footer>Jobcat <span>·</span> 每个机会，都有下一步。<span class="footer-right">${demo?'示例数据':`本机工作区 · 已保存`}</span></footer></main>`;
   if(selectedJob) renderDetail();
+  updateSaveStatus();
 }
 function todayView() {
   const jobs=activeJobs(), live=jobs.filter(j=>!['已结束','已入职'].includes(j.stage));
   const today=localDate();
   const events=live.flatMap(j=>j.interviews.filter(i=>i.status==='待进行').map(i=>({job:j,interview:i}))).sort((a,b)=>(a.interview.date||'9999').localeCompare(b.interview.date||'9999'));
-  const due=todayActions(jobs,today), focused=live.filter(j=>j.focus);
+  const due=todayActions(jobs,today), focused=live.filter(j=>j.focus&&needsFollowUp(j));
   const statsData=stats(jobs);
   const date=new Intl.DateTimeFormat('zh-CN',{month:'long',day:'numeric',weekday:'long'}).format(new Date());
   return header('YOUR NEXT CHAPTER','今天，先从这里开始。',`${date} <span class="sub-sep">/</span> 把精力留给真正值得推进的机会。`,btn(`${icon('plus')}收下一个机会`,'add','primary'))+
   `<section class="overview-grid" aria-label="工作区概览">${[
     ['机会收藏',statsData.collected,'等待你判断的可能性','grid','jobs'],
-    ['正在推进',live.filter(j=>j.decision==='推进'||!['待判断','已结束','已入职'].includes(j.stage)).length,'保持自己的节奏','arrow','jobs'],
+    ['正在推进',live.filter(j=>needsFollowUp(j)&&(j.decision==='推进'||!['待判断','已结束','已入职'].includes(j.stage))).length,'保持自己的节奏','arrow','jobs'],
     ['待进行面试',events.length,'准备好每一次对话','calendar','events'],
-    ['待判断',jobs.filter(j=>j.stage==='待判断').length,'先了解，再作决定','leaf','pending']
+    ['待我决定',jobs.filter(awaitingDecision).length,'先了解，再作决定','leaf','pending']
   ].map(([label,num,sub,i,action])=>`<button class="metric" data-action="${action}"><div class="metric-label">${label}${icon(i)}</div><strong>${String(num).padStart(2,'0')}</strong><small>${sub}</small></button>`).join('')}</section>
   <div class="today-columns"><div><section class="panel"><div class="section-head"><div><span class="small-label">NEXT ACTION</span><h2>今天到期的行动</h2></div>${badge(`${due.length} 项`)}</div>${due.length?`<div class="action-list">${due.slice(0,6).map(j=>`<button class="action-row" data-action="open" data-id="${j.id}"><span class="action-mark">${icon('arrow')}</span><div><strong>${esc(j.nextAction)}</strong><small>${esc(j.company||'公司待补充')} · ${esc(j.title)}</small></div><span class="date-label ${j.nextDate&&j.nextDate<today?'overdue':''}">${j.nextDate===today?'今天':formatDate(j.nextDate)}</span></button>`).join('')}</div>`:empty('今天没有到期行动','在机会详情写下一件具体的事，并选择行动日期。','jobs','查看机会')}</section>
     <section class="panel recent"><div class="section-head"><h2>本周重点</h2>${badge(`${focused.length} 个`)}</div>${focused.length?focused.map(j=>compactJob(j)).join(''):`<p class="quiet-empty">还没有选定重点。在机会详情点“设为本周重点”，建议先选 3—5 个；这不会替你决定是否投递。</p>`}</section>
-    <section class="panel recent"><div class="section-head"><h2>待你判断</h2>${btn('全部机会','jobs','text')}</div>${live.filter(j=>j.decision==='未决定').sort((a,b)=>(RECOMMENDATIONS.indexOf(recommendation(a))<0?9:RECOMMENDATIONS.indexOf(recommendation(a)))-(RECOMMENDATIONS.indexOf(recommendation(b))<0?9:RECOMMENDATIONS.indexOf(recommendation(b)))).slice(0,3).map(j=>compactJob(j)).join('')||'<p class="quiet-empty">暂时没有未决定的机会。</p>'}</section></div>
+    <section class="panel recent"><div class="section-head"><h2>待我决定</h2>${btn('全部机会','jobs','text')}</div>${jobs.filter(awaitingDecision).sort((a,b)=>(RECOMMENDATIONS.indexOf(recommendation(a))<0?9:RECOMMENDATIONS.indexOf(recommendation(a)))-(RECOMMENDATIONS.indexOf(recommendation(b))<0?9:RECOMMENDATIONS.indexOf(recommendation(b)))).slice(0,3).map(j=>compactJob(j)).join('')||'<p class="quiet-empty">暂时没有未决定的机会。</p>'}</section></div>
     <div><section class="panel calendar-panel" id="events"><div class="section-head"><div><span class="small-label">UPCOMING</span><h2>面试与测评</h2></div>${icon('calendar')}</div>${events.length?events.slice(0,4).map(({job,interview})=>`<button class="event-card" data-action="open-interviews" data-id="${job.id}"><div class="event-date">${interview.date?formatDate(interview.date):'时间待定'}</div><h3>${esc(job.company||'公司待补充')}</h3><p>${esc(job.title)}</p><div>${badge(interview.round,'green')}<span>${esc(interview.format||'形式待确认')}</span></div></button>`).join(''):`<div class="quiet-empty calendar-empty">${icon('calendar')}<strong>下一次对话，留个位置。</strong><p>面试安排会出现在这里。<br>也可以记录笔试和作业截止时间。</p></div>`}<p class="panel-footnote">日程仅在工作台展示，暂不发送系统通知。</p></section>
     <section class="direction-card"><span class="small-label">YOUR COMPASS</span><h2>方向开放，判断具体。</h2><p>看实际做什么、能学到什么，<br>也看收入和生活是否合适。</p><div class="direction-tags">${['产品','AI 应用','业务分析'].map(t=>badge(t)).join('')}</div>${btn('查看我的求职偏好 '+icon('arrow'),'settings','text')}</section>
     ${!jobs.length&&!demo?`<button class="demo-link" data-action="demo">先用虚构示例逛一圈 ${icon('arrow')}</button>`:''}</div></div>`;
@@ -119,8 +121,8 @@ function mobileJob(j) {return `<article class="mobile-job"><div class="section-h
 function jobsView() {
   const jobs=visibleJobs(), cities=[...new Set(state.jobs.map(j=>cityGroup(j.city)))].sort();
   return header('OPPORTUNITY LIBRARY',archived?'归档的机会':'机会库','先收集，再判断。每个选择都留下理由。',`${btn(icon('upload')+'导入 AI 草稿','import-ai')}${btn(icon('plus')+'添加机会','add','primary')}`)+
-    `<div class="filterbar"><label class="search-box">${icon('search')}<input id="search" placeholder="搜索岗位、公司、城市…" value="${esc(search)}" aria-label="搜索机会"></label><select id="direction-filter" aria-label="方向筛选"><option value="">全部方向</option>${options(DIRECTIONS,filterDirection)}</select><select id="city-filter" aria-label="城市筛选"><option value="">全部城市</option>${options(cities,filterCity)}</select><select id="stage-filter" aria-label="阶段筛选"><option value="">全部阶段</option>${options(STAGES,filterStage)}</select><select id="recommendation-filter" aria-label="AI建议筛选"><option value="">全部AI建议</option>${options([...RECOMMENDATIONS,'尚未分析'],filterRecommendation)}</select>${btn(focusOnly?'本周重点 ✓':'只看本周重点','focus-filter',focusOnly?'primary':'secondary')}<div class="view-switch">${btn(icon('list'),'list',mode==='list'?'selected':'plain','aria-label="列表视图"')}${btn(icon('grid'),'board',mode==='board'?'selected':'plain','aria-label="看板视图"')}</div></div>
-    <div class="list-meta"><span>共 ${jobs.length} 个机会 ${search||filterCity||filterDirection||filterStage||filterRecommendation||focusOnly?btn('清除筛选','reset-filters','text'):''}</span><div>${selected.size?btn(`导出选中 ${selected.size} 项给 AI`,'export-selected','text'):''}${btn(archived?'返回机会库':'查看归档',archived?'show-active':'show-archive','text')}</div></div>
+    `<div class="filterbar"><label class="search-box">${icon('search')}<input id="search" placeholder="搜索岗位、公司、城市…" value="${esc(search)}" aria-label="搜索机会"></label><select id="direction-filter" aria-label="方向筛选"><option value="">全部方向</option>${options(DIRECTIONS,filterDirection)}</select><select id="city-filter" aria-label="城市筛选"><option value="">全部城市</option>${options(cities,filterCity)}</select><select id="stage-filter" aria-label="阶段筛选"><option value="">全部阶段</option>${options(STAGES,filterStage)}</select><select id="decision-filter" aria-label="我的决定筛选"><option value="">全部决定</option>${options(DECISIONS,filterDecision)}</select><select id="recommendation-filter" aria-label="AI建议筛选"><option value="">全部AI建议</option>${options([...RECOMMENDATIONS,'尚未分析'],filterRecommendation)}</select>${btn(focusOnly?'本周重点 ✓':'只看本周重点','focus-filter',focusOnly?'primary':'secondary')}<div class="view-switch">${btn(icon('list'),'list',mode==='list'?'selected':'plain','aria-label="列表视图"')}${btn(icon('grid'),'board',mode==='board'?'selected':'plain','aria-label="看板视图"')}</div></div>
+    <div class="list-meta"><span>共 ${jobs.length} 个机会${pendingOnly?' · 待我决定':''} ${search||filterCity||filterDirection||filterStage||filterDecision||filterRecommendation||focusOnly||pendingOnly?btn('清除筛选','reset-filters','text'):''}</span><div>${selected.size?btn(`导出选中 ${selected.size} 项给 AI`,'export-selected','text'):''}${btn(archived?'返回机会库':'查看归档',archived?'show-active':'show-archive','text')}</div></div>
     ${!jobs.length?(state.jobs.some(j=>Boolean(j.archived)===archived)?empty('没有符合条件的机会','换个关键词，或清除筛选。','reset-filters','清除筛选'):empty(archived?'归档里还没有机会':'给新的可能性留个位置','粘贴一段 JD，或先记下岗位名称。',archived?'':'add')):mode==='list'?`<div class="table-wrap"><table><thead><tr><th class="check-cell"><input type="checkbox" id="select-all" aria-label="选择当前全部机会" ${jobs.every(j=>selected.has(j.id))?'checked':''}></th><th>岗位 / 公司</th><th>城市与薪资</th><th>AI建议 / 关键缺口</th><th>当前进展</th><th>下一步</th><th></th></tr></thead><tbody>${jobs.map(j=>`<tr><td><input type="checkbox" class="select-job" data-id="${j.id}" aria-label="选择 ${esc(j.title)}" ${selected.has(j.id)?'checked':''}></td><td><button class="table-title" data-action="open" data-id="${j.id}">${j.focus?'★ ':''}${esc(j.title)}<small>${esc(j.company||'公司待补充')}</small></button>${j.decision!=='未决定'?`<span class="decision-small">${esc(j.decision)}</span>`:''}</td><td>${esc(j.city||'待补充')}<small class="salary">${esc(j.salary||'薪资待确认')}</small></td><td>${adviceBadge(j)}<small class="key-gap">${esc(j.keyRequirement||j.concerns||'尚未记录关键缺口')}</small></td><td>${badge(j.stage,stageClass(j.stage))}<small>${esc(j.hiring)}</small></td><td class="next-cell">${esc(j.nextAction||'还没有下一步')}<small>${j.nextDate?formatDate(j.nextDate):'未设日期'}</small></td><td>${btn(icon('arrow'),'open','icon-button',`data-id="${j.id}" aria-label="打开 ${esc(j.title)}"`)}${jobLink(j)}</td></tr>`).join('')}</tbody></table></div><div class="mobile-jobs">${jobs.map(mobileJob).join('')}</div>`:
     `<div class="kanban">${STAGES.map(stage=>{const group=jobs.filter(j=>j.stage===stage);return `<section class="kanban-column"><h3><span class="stage-dot ${stageClass(stage)}"></span>${stage}<em>${group.length}</em></h3>${group.length?group.map(j=>`<button class="kanban-card" data-action="open" data-id="${j.id}"><span class="company-line">${esc(j.company||'公司待补充')}</span><h3>${esc(j.title)}</h3><p>${esc(j.city||'城市待确认')} · ${esc(j.salary||'薪资待确认')}</p>${badge(j.direction)}${j.nextAction?`<div class="kanban-next">${icon('arrow')}${esc(j.nextAction)}</div>`:''}</button>`).join(''):'<div class="kanban-empty">暂时没有机会</div>'}</section>`;}).join('')}</div>`}`;
 }
@@ -130,10 +132,10 @@ function materialsView() {
     <section class="experiences"><div class="section-head"><h2>经历底稿</h2><span class="hint">工作、学习、个人项目都可以</span></div>${state.experiences.length?state.experiences.map(e=>`<article class="experience-card"><div>${badge(e.kind)}<h3>${esc(e.title)}</h3><p class="prewrap">${esc(e.text)}</p><small>${esc(e.evidence||'证据与待确认事项尚未填写')}</small></div>${btn('编辑','edit-experience','text',`data-id="${e.id}"`)}</article>`).join(''):`<div class="blank-note">${icon('leaf')}<div><strong>工具使用只是起点，解决的问题才是经历。</strong><p>记录背景、自己的决定与行动、做到哪一步，以及可以展示的证据。</p></div>${btn('记录一段经历','add-experience')}</div>`}</section>`;
 }
 function reviewView() {
-  const jobs=activeJobs(), counts=stats(jobs);
+  const jobs=state.jobs, counts=stats(jobs);
   const directions=DIRECTIONS.filter(d=>jobs.some(j=>j.direction===d));
   return header('LOOK BACK, MOVE FORWARD','回顾','看真实反馈，再调整方向。数字只描述记录，不评价你。',btn(icon('download')+'导出备份','backup'))+
-    `<section class="overview-grid">${[['收集机会',counts.collected],['实际申请',counts.applied],['完成过面试',counts.interviewed],['收到 Offer',counts.offers]].map(([label,n])=>`<div class="metric"><div class="metric-label">${label}</div><strong>${String(n).padStart(2,'0')}</strong></div>`).join('')}</section><section class="panel"><div class="section-head"><h2>各方向的反馈</h2><span class="hint">按机会去重，非提交次数</span></div>${directions.length?`<div class="table-wrap"><table><thead><tr><th>方向</th><th>收集</th><th>实际申请</th><th>完成过面试</th><th>Offer</th><th></th></tr></thead><tbody>${directions.map(d=>{const s=stats(jobs.filter(j=>j.direction===d));return `<tr><td>${d}</td><td>${s.collected}</td><td>${s.applied}</td><td>${s.interviewed}</td><td>${s.offers}</td><td>${btn('查看机会','filter-direction','text',`data-direction="${d}"`)}</td></tr>`;}).join('')}</tbody></table></div>`:empty('还没有足够的记录','先收下机会，反馈会随着你的行动积累。')}</section><div class="review-note">${icon('chart')}<div><strong>暂时没收到回复，不等于不适合。</strong><p>“实际申请”包含正式投递或发送简历，不包含咨询。“完成过面试”只计算已完成的轮次。口头意向不计入 Offer。记录少时，不推断成功率和因果。</p></div></div>`;
+    `<section class="overview-grid">${[['收集机会',counts.collected],['实际申请',counts.applied],['完成过面试',counts.interviewed],['收到 Offer',counts.offers]].map(([label,n])=>`<div class="metric"><div class="metric-label">${label}</div><strong>${String(n).padStart(2,'0')}</strong></div>`).join('')}</section><section class="panel"><div class="section-head"><h2>各方向的反馈</h2><span class="hint">含归档记录 · 按机会去重，非提交次数</span></div>${directions.length?`<div class="table-wrap"><table><thead><tr><th>方向</th><th>收集</th><th>实际申请</th><th>完成过面试</th><th>Offer</th><th></th></tr></thead><tbody>${directions.map(d=>{const s=stats(jobs.filter(j=>j.direction===d));return `<tr><td>${d}</td><td>${s.collected}</td><td>${s.applied}</td><td>${s.interviewed}</td><td>${s.offers}</td><td>${btn('查看历史记录','review-direction','text',`data-direction="${d}"`)}</td></tr>`;}).join('')}</tbody></table></div>`:empty('还没有足够的记录','先收下机会，反馈会随着你的行动积累。')}</section><div class="review-note">${icon('chart')}<div><strong>暂时没收到回复，不等于不适合。</strong><p>“实际申请”包含正式投递或发送简历，不包含咨询。“完成过面试”只计算已完成的轮次。口头意向不计入 Offer。记录少时，不推断成功率和因果。</p></div></div>`;
 }
 function searchView() {
   const requests=state.searchRequests.slice().sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
@@ -172,6 +174,9 @@ function renderDialog() {
     const r=state.searchRequests.find(r=>r.id===d.id);const jobs=state.jobs.filter(j=>r.resultIds.includes(j.id));
     title='搜岗结果';sub=r.title;wide=true;
     body=`<p class="prewrap">${esc(r.report||'结果尚未回填。')}</p>${jobs.length?jobs.map(j=>compactJob(j)).join(''):'<p>还没有关联机会。</p>'}`;
+  } else if(d.kind==='review-direction') {
+    title=d.direction+' · 历史机会';sub='包含已归档记录，保留真实申请与面试历史。';wide=true;
+    body=state.jobs.filter(j=>j.direction===d.direction).map(j=>`<div>${j.archived?badge('已归档','muted'):''}${compactJob(j)}</div>`).join('');
   } else if(d.kind==='source') {
     title='补充招聘来源'; sub='同一个机会可以保留多个平台来源。';
     body=`<form id="source-form" class="form-stack">${input('平台','platform','','text','required placeholder="例如：猎聘"')}${input('原链接','url','','url','placeholder="https://…"')}<div class="form-grid">${input('发布日期（若已知）','postedDate','','date')}${input('最近核验日期（若已核实）','checkedAt','','date')}${select('招聘状态','status',['待核实','在招','已下架'],'待核实')}</div>${formFooter('添加来源')}</form>`;
@@ -221,7 +226,7 @@ function closeModal(force=false) {
 function renderDetail() {
   const j=getJob(); if(!j) {selectedJob=null; $('#overlay').innerHTML=''; return;}
   if(dialog) return;
-  $('#overlay').innerHTML=`<div class="backdrop drawer-backdrop"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title"><div class="drawer-top"><span>机会档案 <span class="slash">/</span> ${esc(j.company||'公司待补充')}</span><div>${btn(icon('download'),'export-job','icon-button','aria-label="导出此机会给 AI"')}${btn(icon('close'),'close-detail','icon-button','aria-label="关闭机会详情"')}</div></div><div class="drawer-title"><div class="detail-company">${esc(j.company||'公司待补充')} ${j.archived?badge('已归档','muted'):''}</div><h2 id="detail-title">${esc(j.title)}</h2><p>${esc(j.city||'城市待补充')} <span>·</span> ${esc(j.salary||'薪资待确认')} <span>·</span> ${esc(j.direction)}</p><div class="detail-badges">${badge(j.stage,stageClass(j.stage))}${badge(`我的决定：${j.decision}`)}${badge(j.hiring,j.hiring==='已下架'?'gold':'')}${adviceBadge(j)}${btn(j.focus?'取消本周重点':'设为本周重点','toggle-focus',j.focus?'primary':'secondary')}${jobLink(j)}${btn('编辑机会','edit-job','text')}${btn(j.archived?'恢复机会':'归档','archive-job','text')}</div></div>
+  $('#overlay').innerHTML=`<div class="backdrop drawer-backdrop"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title"><div class="drawer-top"><span>机会档案 <span class="slash">/</span> ${esc(j.company||'公司待补充')}</span><div>${btn(icon('download'),'export-job','icon-button','aria-label="导出此机会给 AI"')}${btn(icon('close'),'close-detail','icon-button','aria-label="关闭机会详情"')}</div></div><div class="drawer-title"><div class="detail-company">${esc(j.company||'公司待补充')} ${j.archived?badge('已归档','muted'):''}</div><h2 id="detail-title">${esc(j.title)}</h2><p>${esc(j.city||'城市待补充')} <span>·</span> ${esc(j.salary||'薪资待确认')} <span>·</span> ${esc(j.direction)}</p><div class="detail-badges">${badge(j.stage,stageClass(j.stage))}${badge(`我的决定：${j.decision}`)}${badge(j.hiring,j.hiring==='已下架'?'gold':'')}${adviceBadge(j)}${btn(j.focus?'取消本周重点':'设为本周重点','toggle-focus',j.focus?'primary':'secondary')}${jobLink(j)}${btn(j.decision==='暂缓'?'恢复跟进':'暂缓跟进','defer-job','secondary')}${btn('编辑机会','edit-job','text')}${btn(j.archived?'恢复机会':'归档','archive-job','text')}</div></div>
     <div class="next-banner"><span class="next-icon">${icon('arrow')}</span><div><small>下一步</small><strong>${esc(j.nextAction||'还没有安排，可以先补充信息或记录一次沟通。')}</strong></div><span>${j.nextDate?formatDate(j.nextDate):'未设日期'}</span>${btn('修改','edit-next','text')}${j.nextAction?btn('完成','complete-next','text'):''}</div>
     <nav class="detail-tabs" aria-label="机会详情">${[['overview','岗位与判断'],['timeline','沟通进展'],['interviews','面试与复盘'],['materials','关联材料']].map(([key,label])=>`<button class="${detailTab===key?'active':''}" data-action="detail-tab" data-tab="${key}">${label}${key==='timeline'?`<span>${j.activities.length}</span>`:key==='interviews'?`<span>${j.interviews.length}</span>`:''}</button>`).join('')}</nav><div class="drawer-body">${detailTab==='overview'?overviewDetail(j):detailTab==='timeline'?timelineDetail(j):detailTab==='interviews'?interviewsDetail(j):materialsDetail(j)}</div></section></div>`;
   document.body.classList.add('modal-open');
@@ -257,16 +262,17 @@ document.addEventListener('click',async event=>{
   const el=event.target.closest('[data-action]');if(!el)return;
   const action=el.dataset.action;if(busy)return;
   try {
-    if(action.startsWith('cv-')){await resumeAction(action,el,{state,commit,render,toast,demo});return;}
+    if(action.startsWith('cv-')){await resumeAction(action,el,{state,commit,render,toast,demo,updateSaveStatus});return;}
     if(action==='refresh-state'){if(demo){toast('请先退出示例，再更新正式记录');return;}if($('#overlay form')?.dataset.dirty==='yes'||$('#preferences-form')?.dataset.dirty==='yes'||$('#resume-form')?.dataset.dirty==='yes'){toast('请先保存或取消当前输入，再更新记录');return;}const res=await fetch('/api/state');if(!res.ok)throw Error('读取记录失败');const fresh=await res.json();state=validateState(fresh.state);revision=fresh.revision;$('#update-notice')?.remove();render();toast('已读取最新记录');}
     else if(action==='nav'||['jobs','settings','pending','filter-direction'].includes(action)) {
       if($('#resume-form')?.dataset.dirty==='yes'&&!confirm('简历有未保存修改，确定离开吗？'))return;
       view=action==='nav'?el.dataset.view:action==='settings'?'settings':'jobs';
-      if(action==='pending')filterStage='待判断'; if(action==='filter-direction')filterDirection=el.dataset.direction;
+      if(action==='pending'){pendingOnly=true;archived=false;search='';filterCity='';filterDirection='';filterStage='';filterDecision='';filterRecommendation='';focusOnly=false;}else pendingOnly=false; if(action==='filter-direction')filterDirection=el.dataset.direction;
       selectedJob=null;dialog=null;$('#overlay').innerHTML='';document.body.classList.remove('modal-open');render();window.scrollTo(0,0);
     } else if(action==='events') $('#events')?.scrollIntoView({behavior:'smooth'});
     else if(action==='add')openDialog('job');
     else if(action==='new-search'||action==='edit-search')openDialog('search-request',{id:el.dataset.id});
+    else if(action==='review-direction')openDialog('review-direction',{direction:el.dataset.direction});
     else if(action==='request-copy') {
       const r=state.searchRequests.find(r=>r.id===el.dataset.id);
       const text=`请按 Jobcat 网站中的搜岗需求“${r.title}”（ID：${r.id}）找工作。读取本机工作区最新需求，按 ${r.channels} 搜索，核实原始岗位链接，说明推荐理由、能力差距、薪资与待核实项，并将结果回填到此需求。若渠道受限，请记录范围，不假称已覆盖。`;
@@ -291,8 +297,9 @@ document.addEventListener('click',async event=>{
     else if(action==='add-analysis')openDialog('analysis');
     else if(action==='link-materials')openDialog('link-materials');
     else if(action==='list'||action==='board'){mode=action;render();}
-    else if(action==='reset-filters'){search='';filterCity='';filterDirection='';filterStage='';filterRecommendation='';focusOnly=false;render();}
-    else if(action==='show-archive'||action==='show-active'){archived=action==='show-archive';selected.clear();render();}
+    else if(action==='reset-filters'){search='';filterCity='';filterDirection='';filterStage='';filterDecision='';filterRecommendation='';focusOnly=false;pendingOnly=false;render();}
+    else if(action==='show-archive'||action==='show-active'){archived=action==='show-archive';pendingOnly=false;selected.clear();render();}
+    else if(action==='defer-job'){await changeJob(selectedJob,j=>setDeferred(j,j.decision!=='暂缓'));}
     else if(action==='archive-job'){await changeJob(selectedJob,j=>updateJob(j,{archived:!j.archived}));}
     else if(action==='backup')backup();
     else if(action==='restore'){if(demo)throw Error('请退出示例后恢复正式备份');openDialog('restore');}
@@ -314,12 +321,12 @@ document.addEventListener('click',async event=>{
   } catch(error){toast(error.message,true);}
 });
 document.addEventListener('input',event=>{
-  event.target.closest('#overlay form, #preferences-form, #resume-form')?.setAttribute('data-dirty','yes');
+  event.target.closest('#overlay form, #preferences-form, #resume-form')?.setAttribute('data-dirty','yes');updateSaveStatus();
   if(event.target.id==='search'){const start=event.target.selectionStart;search=event.target.value;render();const field=$('#search');field.focus();field.setSelectionRange(start,start);}
 });
 document.addEventListener('change',async event=>{
   const el=event.target;
-  el.closest('#overlay form, #preferences-form, #resume-form')?.setAttribute('data-dirty','yes');
+  el.closest('#overlay form, #preferences-form, #resume-form')?.setAttribute('data-dirty','yes');updateSaveStatus();
   try {
     if(el.id==='cv-template-file'){await importResume(el.files[0],{state,commit});}
     else if(el.name==='type'&&el.closest('#activity-form')){$('#activity-offer').hidden=el.value!=='Offer';}
@@ -327,6 +334,7 @@ document.addEventListener('change',async event=>{
     else if(el.id==='city-filter'){filterCity=el.value;render();}
     else if(el.id==='recommendation-filter'){filterRecommendation=el.value;render();}
     else if(el.id==='stage-filter'){filterStage=el.value;render();}
+    else if(el.id==='decision-filter'){filterDecision=el.value;render();}
     else if(el.classList.contains('select-job')) {el.checked?selected.add(el.dataset.id):selected.delete(el.dataset.id);render();}
     else if(el.id==='select-all'){visibleJobs().forEach(j=>el.checked?selected.add(j.id):selected.delete(j.id));render();}
     else if(el.id==='ai-file') {
@@ -347,7 +355,7 @@ document.addEventListener('submit',async event=>{
   const data=new FormData(form), values=Object.fromEntries(data.entries()), ids=data.getAll('materialIds');
   const submit=form.querySelector('[type="submit"]');if(submit)submit.disabled=true;
   try {
-    if(form.id==='resume-form'){await saveResume({state,commit});return;}
+    if(form.id==='resume-form'){await saveResume({state,commit,updateSaveStatus});return;}
     if(form.id==='job-form') {
       const {platform,url,postedDate,...fields}=values;
       if(!fields.title.trim()&&!fields.jd.trim())throw Error('请填写岗位名称或粘贴一段 JD');
@@ -355,7 +363,7 @@ document.addEventListener('submit',async event=>{
       if(form.dataset.id)await changeJob(form.dataset.id,j=>updateJob(j,{...fields,title:fields.title.trim()||j.title}));
       else {
         const dup=duplicates(state.jobs,{...fields,url});
-        if(dup.length&&!confirm(`发现可能重复的机会：${dup.map(j=>`${j.company} · ${j.title}`).join('、')}。如果只是补充平台来源，请取消后打开原机会添加来源。仍要作为新机会保存吗？`))return;
+        if(dup.length&&!confirm(`发现可能重复的机会：${dup.map(j=>`${j.company} · ${j.title}${j.archived?'（已归档）':''}`).join('、')}。如果只是补充平台来源，请取消后打开原机会添加来源。仍要作为新机会保存吗？`))return;
         const j=makeJob(fields);if(platform||url)j.sources.push({id:uid(),platform:platform||'手动来源',url,collectedAt:now(),postedDate,checkedAt:'',status:'待核实'});
         const next=clone(state);next.jobs.push(j);await commit(next);selectedJob=j.id;detailTab='overview';
       }

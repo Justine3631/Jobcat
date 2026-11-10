@@ -3,6 +3,7 @@ import base64
 import difflib
 import io
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -25,7 +26,7 @@ def template_bytes(template):
                 raise ValueError('DOCX 解压内容过大')
             archive.read('word/document.xml')
         return raw
-    except (KeyError, IndexError, BadZipFile, TypeError, OSError) as exc:
+    except (KeyError, IndexError, BadZipFile, TypeError, AttributeError, OSError) as exc:
         raise ValueError('无法读取 DOCX 母版') from exc
 
 
@@ -61,6 +62,10 @@ def validate_resumes(state):
     known = {}
     for template in templates:
         known[template['id']] = {slot['key'] for slot in slots(template_bytes(template)) if not slot['heading']}
+        styles = template.get('paragraphStyles', {})
+        if not isinstance(styles, dict) or any(k not in known[template['id']] or
+                v not in ('label', 'plain') for k, v in styles.items()):
+            raise ValueError('简历段落样式无效')
         if not isinstance(template.get('name'), str):
             raise ValueError('母版名称无效')
     for version in versions:
@@ -70,6 +75,45 @@ def validate_resumes(state):
         if not isinstance(fields, dict) or any(k not in known[version['templateId']] or
                 not isinstance(v, str) or len(v) > 16000 for k, v in fields.items()):
             raise ValueError('简历文字或段落无效；不能修改固定标题')
+
+
+def format_paragraph(document, paragraph, style):
+    runs = list(paragraph.getElementsByTagName('w:r'))
+    text = ''.join(n.firstChild.data if n.firstChild else ''
+                   for n in paragraph.getElementsByTagName('w:t'))
+    colon = re.search('[：:]', text) if style == 'label' else None
+    boundary = colon.end() if colon else 0
+    offset = 0
+    for run in runs:
+        nodes = list(run.getElementsByTagName('w:t'))
+        value = ''.join(n.firstChild.data if n.firstChild else '' for n in nodes)
+        if not nodes:
+            continue
+        cut = max(0, min(len(value), boundary - offset))
+        offset += len(value)
+        for part, bold in ((value[:cut], True), (value[cut:], False)):
+            if not part:
+                continue
+            new = run.cloneNode(True)
+            for node in list(new.childNodes):
+                if node.nodeType == node.ELEMENT_NODE and node.tagName != 'w:rPr':
+                    new.removeChild(node)
+            props = new.getElementsByTagName('w:rPr')
+            props = props[0] if props else document.createElement('w:rPr')
+            if not props.parentNode:
+                new.insertBefore(props, new.firstChild)
+            for tag in ('w:b', 'w:bCs'):
+                for node in list(props.getElementsByTagName(tag)):
+                    node.parentNode.removeChild(node)
+                node = document.createElement(tag)
+                node.setAttribute('w:val', '1' if bold else '0')
+                props.appendChild(node)
+            node = document.createElement('w:t')
+            node.setAttribute('xml:space', 'preserve')
+            node.appendChild(document.createTextNode(part))
+            new.appendChild(node)
+            run.parentNode.insertBefore(new, run)
+        run.parentNode.removeChild(run)
 
 
 def build_docx(template, version):
@@ -90,8 +134,8 @@ def build_docx(template, version):
             if original == replacement:
                 continue
             changed = True
-            # Map edits into the existing text nodes. Runs, fonts, bold, tables,
-            # pictures, paragraph properties and every other ZIP part stay intact.
+            # Map edits into existing runs; explicit paragraph rules below own bold.
+            # Fonts, tables, pictures and every other ZIP part stay intact.
             owners = [i for i, value in enumerate(original_parts) for _ in value]
             pieces = ['' for _ in nodes]
             for tag, a, b, c, d in difflib.SequenceMatcher(None, original, replacement, autojunk=False).get_opcodes():
@@ -105,6 +149,10 @@ def build_docx(template, version):
                     node.removeChild(node.firstChild)
                 node.appendChild(document.createTextNode(value))
                 node.setAttribute('xml:space', 'preserve')
+        if not version.get('isMaster'):
+            for key, style in template.get('paragraphStyles', {}).items():
+                format_paragraph(document, paragraphs[int(key)], style)
+                changed = True
         if not changed:
             return raw
         with ZipFile(output, 'w') as target:

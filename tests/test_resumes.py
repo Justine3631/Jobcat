@@ -40,5 +40,29 @@ class ResumeTests(unittest.TestCase):
             with self.assertRaises(ValueError):validate_resumes({'resumeTemplates':[t],'resumes':[{'id':'v','name':'CV','templateId':'t','fields':fields}]})
         with self.assertRaises(ValueError):validate_resumes({'resumes':[{'id':'v','name':'CV','templateId':'missing','fields':{}}]})
 
+    def test_label_bold_stops_at_new_colon_and_survives_repeated_edits(self):
+        _,t=fixture()
+        t['paragraphStyles']={'1':'label'}
+        for text in ('用户问题记录与跟进：在用户测试过程中，整理问题记录。',
+                     '答疑:更长的正文不应继承标题加粗', '删除冒号后整段使用常规字重'):
+            edited=build_docx(t,{'fields':{'1':text}})
+            with ZipFile(io.BytesIO(edited)) as z:
+                doc=minidom.parseString(z.read('word/document.xml'))
+            parts=[]
+            for r in doc.getElementsByTagName('w:p')[1].getElementsByTagName('w:r'):
+                value=''.join(n.firstChild.data if n.firstChild else '' for n in r.getElementsByTagName('w:t'))
+                bold=r.getElementsByTagName('w:b')
+                parts.extend((c,bool(bold and bold[0].getAttribute('w:val')!='0')) for c in value)
+            colon=next((i+1 for i,c in enumerate(text) if c in '：:'),0)
+            self.assertEqual(parts,[(c,i<colon) for i,c in enumerate(text)])
+            t['data']='data:application/octet-stream;base64,'+base64.b64encode(edited).decode()
+
+    def test_plain_rule_clears_inherited_bold_but_master_stays_original(self):
+        raw,t=fixture();t['paragraphStyles']={'1':'plain'}
+        self.assertEqual(build_docx(t,{'isMaster':True,'fields':{}}),raw)
+        with ZipFile(io.BytesIO(build_docx(t,{'fields':{}}))) as z:
+            doc=minidom.parseString(z.read('word/document.xml'))
+        self.assertTrue(all(n.getAttribute('w:val')=='0' for n in doc.getElementsByTagName('w:b')))
+
 
 if __name__=='__main__':unittest.main()

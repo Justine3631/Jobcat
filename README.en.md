@@ -11,11 +11,11 @@ Each installation has its own workspace. Sharing the source code does not share 
 ## Features
 
 - **Opportunities:** employer, title, location, salary, original links, JD history, and information completeness.
-- **Progress:** personal decisions, application stages, weekly focus, next actions, and due dates.
+- **Progress:** personal decisions, application stages, weekly focus, next actions, and due dates. Defer and resume follow-up; deferred or declined jobs stop daily action prompts while existing interviews remain visible.
 - **History:** conversations, actual applications, interview rounds, offers, and linked material versions.
 - **AI collaboration:** saved search briefs, context export, and previewed JSON analysis imports. AI advice is separate from your decisions.
 - **Portable data:** full JSON backup and restore, plus fictional demo data isolated from your real workspace.
-- **Responsive layout:** compact opportunity cards on small screens. Cross-device access and sync are not configured.
+- **Desktop web:** desktop browsers are the current verification priority. Cross-device access and sync are not configured.
 
 ## Quick start
 
@@ -64,9 +64,11 @@ Use either the launcher or the foreground server, not both on the same port. Lau
 4. For AI help, save criteria under **找机会** (Find opportunities), then use **复制给当前聊天** (Copy to current chat) and send it to your own assistant. Saving a brief does not start a search.
 5. Record your decisions, next actions, materials, conversations, and interviews. Log an application only after you actually submit it.
 
+Archiving stores a job without removing its history. Archived jobs participate in duplicate checks and historical application/interview metrics.
+
 ## Resume editor and PDF
 
-Import your own DOCX template (up to 10 MB), duplicate it, edit its text slots, and optionally link it to a job. After you pause typing, the editor generates a preview of the actual PDF. Save text to persist a version, or download the PDF. Previewing does not overwrite saved text. The master is read-only in the UI. Longer text may add pages; fonts are not automatically shrunk.
+Import your own DOCX template (up to 10 MB), duplicate it, edit its text slots, and optionally link it to a job. After you pause typing, the editor generates a preview of the actual PDF. Save text to persist a version, or download the PDF. Previewing does not overwrite saved text. The master is read-only in the UI. Downloading saves and exports a snapshot of the content at the time you clicked. Edits typed during export remain in the form and are marked unsaved. Changes to text or the template invalidate and refresh the old preview. Longer text may add pages; fonts are not automatically shrunk.
 
 PDF generation requires local LibreOffice (`soffice`, or an executable specified by `JOBCAT_SOFFICE`) and the template's fonts. Missing fonts can change the layout. Conversion stays on your computer. The bundled PDF.js renders the PDF pages; its license is in `web/vendor/pdfjs/LICENSE`. Templates and resume versions are included in private workspace backups, not in the public source repository.
 
