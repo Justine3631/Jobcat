@@ -176,3 +176,34 @@ export function demoState(preferences) {
   c.activities = [{id:uid(),type:'沟通',date:now(),text:'【虚构示例】招聘方希望先了解项目经历，尚未投递。',materialIds:[]}];
   return {schemaVersion:1,jobs:[a,b,c],materials:[],experiences:[],searchRequests:[],preferences:clone(preferences)};
 }
+
+export function submittedMaterialIds(state) {
+  return new Set([...state.materials.filter(m=>m.isSubmission).map(m=>m.id),
+    ...state.jobs.flatMap(j=>j.activities.filter(a=>['正式投递','发送简历'].includes(a.type)).flatMap(a=>a.materialIds||[]))]);
+}
+export function resumeCatalogueRows(state) {
+  const drafts=(state.resumes||[]).map(r=>({id:r.id,type:'resume',name:r.name,jobId:r.jobId||'',status:r.isMaster?'母版':r.jobId?'岗位草稿':'方向底稿',archived:Boolean(r.archived),date:r.updatedAt||r.createdAt||'',resume:r}));
+  const submitted=state.jobs.flatMap(job=>job.activities.filter(a=>['正式投递','发送简历'].includes(a.type)).flatMap(activity=>{
+    const files=(activity.materialIds||[]).map(id=>state.materials.find(m=>m.id===id)).filter(m=>m?.kind==='简历'&&m.file);
+    const base={type:'submission',jobId:job.id,date:activity.occurredAt||activity.date,activityId:activity.id,channel:activity.channel||'',archived:false};
+    return files.length?files.map(material=>({...base,id:`submission-${activity.id}-${material.id}`,name:material.name,status:'已投递原件',material})):[{...base,id:`submission-${activity.id}`,name:job.title+' · 投递记录',status:'待补原件'}];
+  }));
+  return [...drafts,...submitted].sort((a,b)=>b.date.localeCompare(a.date));
+}
+export function copyResumeDraft(source,{jobId=source.jobId||'',name=source.name+' 副本',materialId=''}={}) {
+  return {id:uid(),name,templateId:source.templateId,fields:clone(source.fields),isMaster:false,jobId,archived:false,parentId:source.id||'',basedOnMaterialId:materialId,createdAt:now(),updatedAt:now()};
+}
+export function recordResumeSubmission(state,{jobId,resumeId='',file,occurredAt='',channel='',note='',activityId=''}) {
+  const next=clone(state),job=next.jobs.find(j=>j.id===jobId),resume=next.resumes?.find(r=>r.id===resumeId);
+  if(!job)throw Error('请选择关联岗位');
+  if(resumeId&&!resume)throw Error('找不到关联的简历草稿');
+  if(!file?.name||!/^data:application\/pdf;base64,[A-Za-z0-9+/=]+$/.test(file.data||''))throw Error('请提供实际投递的PDF原件');
+  const existing=activityId?job.activities.find(a=>a.id===activityId&&['正式投递','发送简历'].includes(a.type)):null;
+  if(activityId&&!existing)throw Error('找不到原投递记录');
+  const time=now(),material={id:uid(),name:job.title+' · 已投递原件',kind:'简历',version:time.slice(0,10),text:note||'本人确认实际提交的PDF原件。',createdAt:time,isSubmission:true,jobId,sourceResumeId:resumeId,file:clone(file)};
+  if(resume)material.resumeSnapshot={id:resume.id,name:resume.name,templateId:resume.templateId,fields:clone(resume.fields)};
+  next.materials.push(material);
+  const activity=existing?{...existing,channel:channel||existing.channel||'',materialIds:[...(existing.materialIds||[]),material.id]}:{id:uid(),type:'正式投递',date:occurredAt||time,occurredAt,recordedAt:time,channel,text:note||'本人确认已实际投递，保存本次提交的PDF原件。',materialIds:[material.id]};
+  next.jobs=next.jobs.map(j=>j.id===jobId?updateJob(j,{materialIds:[...new Set([...j.materialIds,material.id])],activities:existing?j.activities.map(a=>a.id===existing.id?activity:a):[...j.activities,activity],stage:!existing&&['待判断','准备中'].includes(j.stage)?'已沟通／已申请':j.stage}):j);
+  return next;
+}

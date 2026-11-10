@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {makeJob,updateJob,addActivity,saveInterview,duplicates,stats,previewDraft,applyDraft,validateState,setDeferred,todayActions,needsFollowUp,awaitingDecision} from '../web/model.mjs';
+import {makeJob,updateJob,addActivity,saveInterview,duplicates,stats,previewDraft,applyDraft,validateState,setDeferred,todayActions,needsFollowUp,awaitingDecision,resumeCatalogueRows,submittedMaterialIds,copyResumeDraft,recordResumeSubmission} from '../web/model.mjs';
 
 test('declined and deferred jobs do not prompt follow-up; real interview records stay intact',()=>{
   for(const decision of ['不考虑','暂缓']){
@@ -160,4 +160,28 @@ test('today includes only dated due actions, excluding unplanned inventory and c
   const {todayActions}=await import('../web/model.mjs');
   const jobs=[makeJob({title:'无日期',nextAction:'确认要求'}),makeJob({title:'明天',nextAction:'准备',nextDate:'2026-11-11'}),makeJob({title:'今天',nextAction:'询问编程要求',nextDate:'2026-11-10'}),makeJob({title:'已关闭',nextAction:'旧任务',nextDate:'2026-11-09',stage:'已结束'}),makeJob({title:'逾期',nextAction:'跟进',nextDate:'2026-11-09'})];
   assert.deepEqual(todayActions(jobs,'2026-11-10').map(j=>j.title),['逾期','今天']);
+});
+
+
+test('resume copies are independent drafts and catalogue separates original submissions',()=>{
+  const source={id:'base',name:'底稿',templateId:'template',fields:{'1':'原文'},isMaster:true};
+  const draft=copyResumeDraft(source,{jobId:'job',name:'针对版'});draft.fields['1']='修改';
+  assert.equal(source.fields['1'],'原文');assert.equal(draft.isMaster,false);assert.equal(draft.jobId,'job');
+  const state=workspace([makeJob({id:'job',title:'社区运营'})]);state.resumes=[source,draft];
+  const submitted=recordResumeSubmission(state,{jobId:'job',resumeId:draft.id,file:{name:'actual.pdf',data:'data:application/pdf;base64,JVBERi0='},occurredAt:'2026-11-10T10:00',channel:'官网'});
+  assert.equal(stats(submitted.jobs).applied,1);assert.equal(submitted.jobs[0].stage,'已沟通／已申请');
+  assert.equal(state.materials.length,0);assert.equal(submitted.materials[0].resumeSnapshot.fields['1'],'修改');
+  submitted.resumes[1].fields['1']='后续修改';assert.equal(submitted.materials[0].resumeSnapshot.fields['1'],'修改');
+  assert.ok(submittedMaterialIds(submitted).has(submitted.materials[0].id));
+  const rows=resumeCatalogueRows(submitted);assert.equal(rows.filter(r=>r.type==='submission').length,1);assert.equal(rows.filter(r=>r.type==='resume').length,2);
+});
+
+test('attaching an actual PDF to an existing application does not create a second application',()=>{
+  const job=makeJob({id:'job',title:'已投岗位',stage:'测评／面试中',activities:[{id:'sent',type:'正式投递',date:'2026-11-10T10:00',text:'已投递',materialIds:[]}]});
+  const state=workspace([job]);assert.equal(resumeCatalogueRows(state)[0].status,'待补原件');
+  const next=recordResumeSubmission(state,{jobId:'job',activityId:'sent',file:{name:'sent.pdf',data:'data:application/pdf;base64,JVBERi0='}});
+  assert.equal(next.jobs[0].activities.filter(a=>a.type==='正式投递').length,1);
+  assert.equal(next.jobs[0].stage,'测评／面试中');assert.equal(next.jobs[0].activities[0].date,job.activities[0].date);
+  assert.equal(resumeCatalogueRows(next)[0].status,'已投递原件');assert.equal(stats(next.jobs).applied,1);
+  assert.throws(()=>recordResumeSubmission(state,{jobId:'job',activityId:'missing',file:{name:'a.pdf',data:'data:application/pdf;base64,JVBERi0='}}));
 });

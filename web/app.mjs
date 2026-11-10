@@ -1,5 +1,5 @@
-import {resumeView,resumeAction,importResume,saveResume} from './resumes.mjs';
-import {STAGES,DIRECTIONS,DECISIONS,RECOMMENDATIONS,recommendation,cityGroup,todayActions,needsFollowUp,awaitingDecision,setDeferred,ACTIVITY_TYPES,uid,now,localDate,clone,makeJob,updateJob,addActivity,saveInterview,duplicates,stats,validateState,previewDraft,applyDraft,demoState} from './model.mjs';
+import {resumeView,resumeAction,importResume,saveResume,openResume,showResumeList,submitResumeSubmission} from './resumes.mjs';
+import {STAGES,DIRECTIONS,DECISIONS,RECOMMENDATIONS,recommendation,submittedMaterialIds,resumeCatalogueRows,copyResumeDraft,cityGroup,todayActions,needsFollowUp,awaitingDecision,setDeferred,ACTIVITY_TYPES,uid,now,localDate,clone,makeJob,updateJob,addActivity,saveInterview,duplicates,stats,validateState,previewDraft,applyDraft,demoState} from './model.mjs';
 
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -48,13 +48,13 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkForUp
 setInterval(checkForUpdates,45000);
 function updateSaveStatus(){const target=$('footer .footer-right');if(target&&!demo)target.textContent=$('#overlay form[data-dirty="yes"], #preferences-form[data-dirty="yes"], #resume-form[data-dirty="yes"]')?'本机工作区 · 有未保存修改':'本机工作区 · 已保存';}
 function toast(message,error=false) { $('#toast').textContent=message; $('#toast').className=`visible ${error?'error':''}`; clearTimeout(toastTimer); toastTimer=setTimeout(()=>$('#toast').className='',4500); }
-async function commit(next,{renderView=true}={}) {
+async function commit(next,{renderView=true,restore=false}={}) {
   if(busy) throw Error('正在保存，请稍候');
   busy=true; document.body.classList.add('saving');
   try {
     validateState(next);
     if(!demo) {
-      const response=await fetch('/api/state',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision,state:next})});
+      const response=await fetch('/api/state',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision,state:next,...(restore?{restore:true}:{})})});
       const result=await response.json(); if(!response.ok) throw Error(result.error || '保存失败');
       revision=result.revision;
     }
@@ -87,7 +87,7 @@ function render() {
     <nav aria-label="主导航">${[['today','home','今天'],['jobs','grid','机会库'],['search','search','找机会'],['resumes','file','简历'],['materials','file','材料与经历'],['review','chart','回顾']].map(([key,i,label])=>`<button class="nav-item ${view===key?'active':''}" data-action="nav" data-view="${key}">${icon(i)}<span>${label}</span>${key==='jobs'?`<em>${count}</em>`:''}</button>`).join('')}</nav>
     <div class="sidebar-note"><span class="small-label">当前方向</span><strong>你的求职偏好</strong><p>${esc(state.preferences.directions)}</p><span class="location-dot"></span>${esc(state.preferences.city||'本地')} · 城市不限</div>
     <div class="sidebar-bottom"><button class="nav-item ${view==='settings'?'active':''}" data-action="nav" data-view="settings">${icon('settings')}<span>偏好与数据</span></button><div class="user"><span class="avatar">佳</span><div>我的工作区<small><span class="status-dot"></span>${demo?'示例体验中':'数据保存在本机'}</small></div></div></div></aside>
-    <main>${demo?`<div class="demo-banner"><span>示例模式 · 公司与机会均为虚构，修改不写入正式记录。</span>${btn('退出示例','exit-demo','plain')}</div>`:''}<div class="content">${view==='today'?todayView():view==='jobs'?jobsView():view==='search'?searchView():view==='resumes'?resumeView(state):view==='materials'?materialsView():view==='review'?reviewView():settingsView()}</div><footer>Jobcat <span>·</span> 每个机会，都有下一步。<span class="footer-right">${demo?'示例数据':`本机工作区 · 已保存`}</span></footer></main>`;
+    <main>${demo?`<div class="demo-banner"><span>示例模式 · 公司与机会均为虚构，修改不写入正式记录。</span>${btn('退出示例','exit-demo','plain')}</div>`:''}<div class="content">${view==='today'?todayView():view==='jobs'?jobsView():view==='search'?searchView():view==='resumes'?resumeView(state,{render}):view==='materials'?materialsView():view==='review'?reviewView():settingsView()}</div><footer>Jobcat <span>·</span> 每个机会，都有下一步。<span class="footer-right">${demo?'示例数据':`本机工作区 · 已保存`}</span></footer></main>`;
   if(selectedJob) renderDetail();
   updateSaveStatus();
 }
@@ -127,8 +127,9 @@ function jobsView() {
     `<div class="kanban">${STAGES.map(stage=>{const group=jobs.filter(j=>j.stage===stage);return `<section class="kanban-column"><h3><span class="stage-dot ${stageClass(stage)}"></span>${stage}<em>${group.length}</em></h3>${group.length?group.map(j=>`<button class="kanban-card" data-action="open" data-id="${j.id}"><span class="company-line">${esc(j.company||'公司待补充')}</span><h3>${esc(j.title)}</h3><p>${esc(j.city||'城市待确认')} · ${esc(j.salary||'薪资待确认')}</p>${badge(j.direction)}${j.nextAction?`<div class="kanban-next">${icon('arrow')}${esc(j.nextAction)}</div>`:''}</button>`).join(''):'<div class="kanban-empty">暂时没有机会</div>'}</section>`;}).join('')}</div>`}`;
 }
 function materialsView() {
+  const locked=submittedMaterialIds(state);
   return header('YOUR EVIDENCE','材料与经历','把真实做过的事，整理成下一次机会的证据。',`${btn(icon('plus')+'记录经历','add-experience')}${btn(icon('plus')+'添加材料','add-material','primary')}`)+
-    `<section><div class="section-head"><h2>简历与作品</h2><span class="hint">保留版本，关联实际提交记录</span></div>${state.materials.length?`<div class="materials-grid">${state.materials.map(m=>{const linked=state.jobs.filter(j=>j.materialIds.includes(m.id)||j.activities.some(a=>a.materialIds.includes(m.id)));return `<article class="material-card"><div class="material-top">${icon('file')}${badge(m.kind)}</div><h3>${esc(m.name)}</h3><p>${esc(m.version||'未标版本')}</p><div class="material-preview">${esc(m.text||m.file?.name||'暂无说明')}</div><small>关联 ${linked.length} 个机会 · ${formatDate(m.createdAt)}</small><div class="card-actions">${btn('查看 / 编辑','edit-material','text',`data-id="${m.id}"`)}${m.file?btn(icon('download')+'下载附件','download-material','text',`data-id="${m.id}"`):''}</div></article>`;}).join('')}</div>`:empty('你的材料，可以慢慢完善','先添加一份现有简历，或一个能展示的作品。','add-material','添加材料')}</section>
+    `<section><div class="section-head"><h2>简历与作品</h2><span class="hint">保留版本，关联实际提交记录</span></div>${state.materials.length?`<div class="materials-grid">${state.materials.map(m=>{const linked=state.jobs.filter(j=>j.materialIds.includes(m.id)||j.activities.some(a=>a.materialIds.includes(m.id)));return `<article class="material-card"><div class="material-top">${icon('file')}${badge(m.kind)}</div><h3>${esc(m.name)}</h3><p>${esc(m.version||'未标版本')}</p><div class="material-preview">${esc(m.text||m.file?.name||'暂无说明')}</div><small>关联 ${linked.length} 个机会 · ${formatDate(m.createdAt)}</small><div class="card-actions">${btn(locked.has(m.id)&&m.file?'查看原件':'查看 / 编辑','edit-material','text',`data-id="${m.id}"`)}${m.file?btn(icon('download')+'下载附件','download-material','text',`data-id="${m.id}"`):''}</div></article>`;}).join('')}</div>`:empty('你的材料，可以慢慢完善','先添加一份现有简历，或一个能展示的作品。','add-material','添加材料')}</section>
     <section class="experiences"><div class="section-head"><h2>经历底稿</h2><span class="hint">工作、学习、个人项目都可以</span></div>${state.experiences.length?state.experiences.map(e=>`<article class="experience-card"><div>${badge(e.kind)}<h3>${esc(e.title)}</h3><p class="prewrap">${esc(e.text)}</p><small>${esc(e.evidence||'证据与待确认事项尚未填写')}</small></div>${btn('编辑','edit-experience','text',`data-id="${e.id}"`)}</article>`).join(''):`<div class="blank-note">${icon('leaf')}<div><strong>工具使用只是起点，解决的问题才是经历。</strong><p>记录背景、自己的决定与行动、做到哪一步，以及可以展示的证据。</p></div>${btn('记录一段经历','add-experience')}</div>`}</section>`;
 }
 function reviewView() {
@@ -174,6 +175,18 @@ function renderDialog() {
     const r=state.searchRequests.find(r=>r.id===d.id);const jobs=state.jobs.filter(j=>r.resultIds.includes(j.id));
     title='搜岗结果';sub=r.title;wide=true;
     body=`<p class="prewrap">${esc(r.report||'结果尚未回填。')}</p>${jobs.length?jobs.map(j=>compactJob(j)).join(''):'<p>还没有关联机会。</p>'}`;
+  } else if(d.kind==='create-resume') {
+    const job=state.jobs.find(j=>j.id===d.jobId),sources=(state.resumes||[]).filter(r=>!r.archived);
+    title='创建简历草稿';sub='复制底稿内容，后续修改不会影响原版本。';
+    body=`<form id="create-resume-form" class="form-stack"><label class="field"><span>选择底稿</span><select name="sourceId" required>${sources.map(r=>`<option value="${r.id}">${esc(r.name)}${r.isMaster?' · 母版':''}</option>`).join('')}</select></label>${input('草稿名称','name',job?job.title+' · 针对版草稿':'新的方向简历','text','required')}<label class="field"><span>关联岗位</span><select name="jobId"><option value="">通用底稿</option>${state.jobs.map(j=>`<option value="${j.id}" ${j.id===d.jobId?'selected':''}>${esc(j.company)} · ${esc(j.title)}</option>`).join('')}</select></label>${formFooter('创建并编辑')}</form>`;
+  } else if(d.kind==='resume-submission') {
+    const resume=state.resumes?.find(r=>r.id===d.resumeId),jobId=d.jobId||resume?.jobId||'',source=d.activityId||!resume?'upload':'generated';
+    title=d.activityId?'补充已投递原件':'登记已投递';sub='只登记你已经完成的提交，不会向招聘方发送材料。';
+    body=`<form id="resume-submission-form" data-activity-id="${d.activityId||''}" class="form-stack"><label class="field"><span>投递岗位</span><select name="jobId" required ${d.activityId?'disabled':''}><option value="">请选择岗位</option>${state.jobs.map(j=>`<option value="${j.id}" ${j.id===jobId?'selected':''}>${esc(j.company)} · ${esc(j.title)}</option>`).join('')}</select></label>${d.activityId?`<input type="hidden" name="jobId" value="${jobId}">`:''}
+    <label class="field"><span>实际发送的PDF来自哪里</span><select name="pdfSource"><option value="generated" ${source==='generated'?'selected':''}>由网页草稿生成，确认就是实际提交内容</option><option value="upload" ${source==='upload'?'selected':''}>上传实际发送的PDF文件</option></select></label>
+    <div id="submission-generated" ${source!=='generated'?'hidden':''}><label class="field"><span>选择当时使用的草稿</span><select name="resumeId">${(state.resumes||[]).filter(r=>!r.isMaster).map(r=>`<option value="${r.id}" ${r.id===d.resumeId?'selected':''}>${esc(r.name)}</option>`).join('')}</select></label></div>
+    <div id="submission-upload" ${source!=='upload'?'hidden':''}><label class="field"><span>实际投递PDF（不超过10MB）</span><input type="file" name="submittedFile" accept=".pdf,application/pdf"></label></div>
+    <p class="hint">如果在外部修改过文件，请上传实际发送的原件。留档后只读保存。</p>${d.activityId?'':input('实际投递时间（不清楚可留空）','occurredAt','','datetime-local')}${input('渠道（可选）','channel','','text','placeholder="官网 / 猎聘 / 邮箱等"')}${textarea('备注（可选）','note','')}<label class="checkbox-list"><span><input type="checkbox" name="confirmed" value="yes" required> 我确认已实际投递，以上PDF对应实际发送内容</span></label>${formFooter(d.activityId?'保存原件':'确认登记并留档')}</form>`;
   } else if(d.kind==='review-direction') {
     title=d.direction+' · 历史机会';sub='包含已归档记录，保留真实申请与面试历史。';wide=true;
     body=state.jobs.filter(j=>j.direction===d.direction).map(j=>`<div>${j.archived?badge('已归档','muted'):''}${compactJob(j)}</div>`).join('');
@@ -190,7 +203,9 @@ function renderDialog() {
   } else if(d.kind==='material') {
     const m=state.materials.find(x=>x.id===d.id)||{};
     title=d.id?'编辑材料说明':'添加一份材料'; sub=d.id?'附件版本不会被替换；新版本请另建材料。':'选择文件或填写作品链接、说明，只保存到本机。';
+    if(d.id&&submittedMaterialIds(state).has(d.id)&&m.file){title='已投递原件';sub='原件已固定留档，不能覆盖修改。';body=`<p class="prewrap">${esc(m.name)}\n${esc(m.version||'')}\n${esc(m.file.name)}</p>${btn('下载原件','download-material','primary',`data-id="${m.id}"`)}`;}else {
     body=`<form id="material-form" class="form-stack" data-id="${d.id||''}">${input('材料名称','name',m.name||'','text','required placeholder="例如：产品方向简历"')}<div class="form-grid">${select('类型','kind',['简历','作品','项目说明','其他'],m.kind||'简历')}${input('版本','version',m.version||'','text','placeholder="例如：v1 · 2026-11-09"')}</div>${textarea('内容摘要 / 作品链接','text',m.text||'','rows="5"')}<p class="hint">AI 导出可包含你选中的文字摘要，不自动发送附件。</p>${d.id?m.file?`<div class="file-note">${icon('file')}${esc(m.file.name)}</div>`:'':`<label class="field"><span>附件（可选，最大 10 MB）</span><input type="file" name="attachment"></label>`}${formFooter(d.id?'保存说明':'保存材料')}</form>`;
+    }
   } else if(d.kind==='experience') {
     const e=state.experiences.find(x=>x.id===d.id)||{};
     title=d.id?'编辑经历':'记录一段经历'; sub='描述自己做过的事，结果暂未验证也可以如实记录。';
@@ -226,7 +241,7 @@ function closeModal(force=false) {
 function renderDetail() {
   const j=getJob(); if(!j) {selectedJob=null; $('#overlay').innerHTML=''; return;}
   if(dialog) return;
-  $('#overlay').innerHTML=`<div class="backdrop drawer-backdrop"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title"><div class="drawer-top"><span>机会档案 <span class="slash">/</span> ${esc(j.company||'公司待补充')}</span><div>${btn(icon('download'),'export-job','icon-button','aria-label="导出此机会给 AI"')}${btn(icon('close'),'close-detail','icon-button','aria-label="关闭机会详情"')}</div></div><div class="drawer-title"><div class="detail-company">${esc(j.company||'公司待补充')} ${j.archived?badge('已归档','muted'):''}</div><h2 id="detail-title">${esc(j.title)}</h2><p>${esc(j.city||'城市待补充')} <span>·</span> ${esc(j.salary||'薪资待确认')} <span>·</span> ${esc(j.direction)}</p><div class="detail-badges">${badge(j.stage,stageClass(j.stage))}${badge(`我的决定：${j.decision}`)}${badge(j.hiring,j.hiring==='已下架'?'gold':'')}${adviceBadge(j)}${btn(j.focus?'取消本周重点':'设为本周重点','toggle-focus',j.focus?'primary':'secondary')}${jobLink(j)}${btn(j.decision==='暂缓'?'恢复跟进':'暂缓跟进','defer-job','secondary')}${btn('编辑机会','edit-job','text')}${btn(j.archived?'恢复机会':'归档','archive-job','text')}</div></div>
+  $('#overlay').innerHTML=`<div class="backdrop drawer-backdrop"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title"><div class="drawer-top"><span>机会档案 <span class="slash">/</span> ${esc(j.company||'公司待补充')}</span><div>${btn(icon('download'),'export-job','icon-button','aria-label="导出此机会给 AI"')}${btn(icon('close'),'close-detail','icon-button','aria-label="关闭机会详情"')}</div></div><div class="drawer-title"><div class="detail-company">${esc(j.company||'公司待补充')} ${j.archived?badge('已归档','muted'):''}</div><h2 id="detail-title">${esc(j.title)}</h2><p>${esc(j.city||'城市待补充')} <span>·</span> ${esc(j.salary||'薪资待确认')} <span>·</span> ${esc(j.direction)}</p><div class="detail-badges">${badge(j.stage,stageClass(j.stage))}${badge(`我的决定：${j.decision}`)}${badge(j.hiring,j.hiring==='已下架'?'gold':'')}${adviceBadge(j)}${btn(j.focus?'取消本周重点':'设为本周重点','toggle-focus',j.focus?'primary':'secondary')}${jobLink(j)}${btn(j.decision==='暂缓'?'恢复跟进':'暂缓跟进','defer-job','secondary')}${btn('简历与投递','job-resumes','secondary')}${btn('编辑机会','edit-job','text')}${btn(j.archived?'恢复机会':'归档','archive-job','text')}</div></div>
     <div class="next-banner"><span class="next-icon">${icon('arrow')}</span><div><small>下一步</small><strong>${esc(j.nextAction||'还没有安排，可以先补充信息或记录一次沟通。')}</strong></div><span>${j.nextDate?formatDate(j.nextDate):'未设日期'}</span>${btn('修改','edit-next','text')}${j.nextAction?btn('完成','complete-next','text'):''}</div>
     <nav class="detail-tabs" aria-label="机会详情">${[['overview','岗位与判断'],['timeline','沟通进展'],['interviews','面试与复盘'],['materials','关联材料']].map(([key,label])=>`<button class="${detailTab===key?'active':''}" data-action="detail-tab" data-tab="${key}">${label}${key==='timeline'?`<span>${j.activities.length}</span>`:key==='interviews'?`<span>${j.interviews.length}</span>`:''}</button>`).join('')}</nav><div class="drawer-body">${detailTab==='overview'?overviewDetail(j):detailTab==='timeline'?timelineDetail(j):detailTab==='interviews'?interviewsDetail(j):materialsDetail(j)}</div></section></div>`;
   document.body.classList.add('modal-open');
@@ -242,7 +257,18 @@ function overviewDetail(j) {
 }
 function timelineDetail(j) {return `<div class="section-head"><h3>每一次沟通，都能接着往下走。</h3>${btn(icon('plus')+'记一笔进展','add-activity','primary')}</div>${j.activities.length?`<div class="timeline">${j.activities.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).map(a=>`<article><div class="timeline-dot"></div><div class="timeline-meta">${badge(a.type)}<small>${fullDate(a.date)}</small></div><p class="prewrap">${esc(a.text)}</p>${a.contact||a.channel?`<small>${esc(a.contact||'')} ${a.channel?'· '+esc(a.channel):''}</small>`:''}${a.materialIds?.length?`<div class="attached-materials">实际提交：${a.materialIds.map(id=>{const m=state.materials.find(m=>m.id===id);return badge(m?`${m.name} ${m.version}`:'材料不可用');}).join('')}</div>`:''}</article>`).join('')}</div>`:empty('从第一笔进展开始','电话、招聘软件里的聊天、邮件回复，都可以简单记下来。','add-activity','记一笔进展')}`;}
 function interviewsDetail(j) {return `<div class="section-head"><h3>面试与测评</h3>${btn(icon('plus')+'添加安排','add-interview','primary')}</div>${j.interviews.length?j.interviews.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(i=>`<article class="interview-card"><div class="section-head"><div><h3>${esc(i.round)}</h3><p>${i.date?formatDate(i.date):'时间待定'} · ${esc(i.format||'形式待确认')}</p></div>${badge(i.status,i.status==='已完成'?'green':'')}</div>${i.notes?`<div class="interview-block"><small>准备事项</small><p class="prewrap">${esc(i.notes)}</p></div>`:''}${[['实际问答',i.questions],['明确反馈',i.feedback],['个人复盘 / 推测',i.review]].filter(([,v])=>v).map(([label,text])=>`<div class="interview-block"><small>${label}</small><p class="prewrap">${esc(text)}</p></div>`).join('')}${btn('更新 / 记录复盘','edit-interview','text',`data-id="${i.id}"`)}</article>`).join(''):empty('给下一次对话留个位置','每轮面试独立记录；已发生的面试也可以直接补录。','add-interview','添加安排')}`;}
-function materialsDetail(j) {const materials=state.materials.filter(m=>j.materialIds.includes(m.id)); return `<div class="section-head"><h3>为这个机会准备的材料</h3>${btn('选择关联材料','link-materials','primary')}</div><p class="hint">这里只是准备材料；实际提交版本记录在“沟通进展”中。</p>${materials.length?materials.map(m=>`<article class="linked-material">${icon('file')}<div><strong>${esc(m.name)}</strong><small>${esc(m.version||'未标版本')}</small><p>${esc(m.text)}</p></div>${m.file?btn('下载','download-material','text',`data-id="${m.id}"`):''}</article>`).join(''):'<div class="quiet-empty">暂无关联材料。先到“材料与经历”添加，再回到这里选择。</div>'}`;}
+function materialsDetail(j) {
+ const drafts=(state.resumes||[]).filter(r=>r.jobId===j.id&&!r.archived),submissions=resumeCatalogueRows(state).filter(r=>r.type==='submission'&&r.jobId===j.id),locked=submittedMaterialIds(state);
+ const materials=state.materials.filter(m=>j.materialIds.includes(m.id)&&!locked.has(m.id));
+ return `<div class="section-head"><h3>岗位简历草稿</h3>${btn('从底稿创建','create-job-resume','primary')}</div>${drafts.length?drafts.map(r=>`<article class="linked-material"><div><strong>${esc(r.name)}</strong><small>可编辑草稿</small></div>${btn('打开编辑','open-resume','secondary',`data-id="${r.id}"`)}</article>`).join(''):'<p class="hint">尚未创建针对版简历，可直接从底稿开始。</p>'}
+ <section class="detail-section"><h3>实际投递原件</h3>${submissions.length?submissions.map(r=>`<article class="linked-material"><div><strong>${esc(r.name)}</strong><small>${esc(r.status)} · ${formatDate(r.date)}</small></div>${r.material?btn('查看原件','open-resume','secondary',`data-id="${r.id}"`):btn('补充实际PDF','fill-submission','secondary',`data-activity-id="${r.activityId}"`)}</article>`).join(''):'<p class="hint">确认实际提交后，在简历编辑页登记并留存PDF。</p>'}</section>
+ <div class="section-head"><h3>其他准备材料</h3>${btn('选择关联材料','link-materials','secondary')}</div>${materials.map(m=>`<article class="linked-material"><div><strong>${esc(m.name)}</strong><small>${esc(m.version||'未标版本')}</small></div>${m.file?btn('下载','download-material','text',`data-id="${m.id}"`):''}</article>`).join('')||'<p class="hint">暂无其他准备材料。</p>'}`;
+}
+function goToResume({id='',jobId=''}={}){
+ if(!(id?openResume(id):showResumeList(jobId)))return;
+ view='resumes';selectedJob=null;dialog=null;$('#overlay').innerHTML='';document.body.classList.remove('modal-open');render();window.scrollTo(0,0);
+}
+
 function download(name, data, type='application/json') {
   const blob=data instanceof Blob?data:new Blob([typeof data==='string'?data:JSON.stringify(data,null,2)],{type});
   const url=URL.createObjectURL(blob), a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -262,16 +288,21 @@ document.addEventListener('click',async event=>{
   const el=event.target.closest('[data-action]');if(!el)return;
   const action=el.dataset.action;if(busy)return;
   try {
-    if(action.startsWith('cv-')){await resumeAction(action,el,{state,commit,render,toast,demo,updateSaveStatus});return;}
+    if(action.startsWith('cv-')){await resumeAction(action,el,{state,commit,render,toast,demo,updateSaveStatus,openCreate:data=>openDialog('create-resume',data),openSubmission:data=>openDialog('resume-submission',data)});return;}
     if(action==='refresh-state'){if(demo){toast('请先退出示例，再更新正式记录');return;}if($('#overlay form')?.dataset.dirty==='yes'||$('#preferences-form')?.dataset.dirty==='yes'||$('#resume-form')?.dataset.dirty==='yes'){toast('请先保存或取消当前输入，再更新记录');return;}const res=await fetch('/api/state');if(!res.ok)throw Error('读取记录失败');const fresh=await res.json();state=validateState(fresh.state);revision=fresh.revision;$('#update-notice')?.remove();render();toast('已读取最新记录');}
     else if(action==='nav'||['jobs','settings','pending','filter-direction'].includes(action)) {
       if($('#resume-form')?.dataset.dirty==='yes'&&!confirm('简历有未保存修改，确定离开吗？'))return;
       view=action==='nav'?el.dataset.view:action==='settings'?'settings':'jobs';
       if(action==='pending'){pendingOnly=true;archived=false;search='';filterCity='';filterDirection='';filterStage='';filterDecision='';filterRecommendation='';focusOnly=false;}else pendingOnly=false; if(action==='filter-direction')filterDirection=el.dataset.direction;
+      if(view==='resumes')showResumeList('',true);
       selectedJob=null;dialog=null;$('#overlay').innerHTML='';document.body.classList.remove('modal-open');render();window.scrollTo(0,0);
     } else if(action==='events') $('#events')?.scrollIntoView({behavior:'smooth'});
     else if(action==='add')openDialog('job');
     else if(action==='new-search'||action==='edit-search')openDialog('search-request',{id:el.dataset.id});
+    else if(action==='open-resume')goToResume({id:el.dataset.id});
+    else if(action==='job-resumes')goToResume({jobId:selectedJob});
+    else if(action==='create-job-resume')openDialog('create-resume',{jobId:selectedJob});
+    else if(action==='fill-submission')openDialog('resume-submission',{jobId:selectedJob,activityId:el.dataset.activityId});
     else if(action==='review-direction')openDialog('review-direction',{direction:el.dataset.direction});
     else if(action==='request-copy') {
       const r=state.searchRequests.find(r=>r.id===el.dataset.id);
@@ -316,7 +347,7 @@ document.addEventListener('click',async event=>{
     } else if(action==='apply-restore') {
       if(!restoreData)throw Error('请先选择有效备份');
       if(!confirm('恢复会替换当前全部记录。即将先下载当前备份，确定继续吗？'))return;
-      backup();await commit(restoreData);selectedJob=null;selected.clear();closeModal(true);render();
+      backup();await commit(restoreData,{restore:true});selectedJob=null;selected.clear();closeModal(true);render();
     }
   } catch(error){toast(error.message,true);}
 });
@@ -329,6 +360,7 @@ document.addEventListener('change',async event=>{
   el.closest('#overlay form, #preferences-form, #resume-form')?.setAttribute('data-dirty','yes');updateSaveStatus();
   try {
     if(el.id==='cv-template-file'){await importResume(el.files[0],{state,commit});}
+    else if(el.name==='pdfSource'){if($('#submission-upload'))$('#submission-upload').hidden=el.value!=='upload';if($('#submission-generated'))$('#submission-generated').hidden=el.value!=='generated';}
     else if(el.name==='type'&&el.closest('#activity-form')){$('#activity-offer').hidden=el.value!=='Offer';}
     else if(el.id==='direction-filter'){filterDirection=el.value;render();}
     else if(el.id==='city-filter'){filterCity=el.value;render();}
@@ -353,9 +385,16 @@ document.addEventListener('change',async event=>{
 document.addEventListener('submit',async event=>{
   const form=event.target;event.preventDefault();if(busy)return;
   const data=new FormData(form), values=Object.fromEntries(data.entries()), ids=data.getAll('materialIds');
-  const submit=form.querySelector('[type="submit"]');if(submit)submit.disabled=true;
+  const submit=form.querySelector('[type="submit"]')||(form.id==='resume-form'?document.querySelector('[type="submit"][form="resume-form"]'):null);if(submit)submit.disabled=true;
   try {
     if(form.id==='resume-form'){await saveResume({state,commit,updateSaveStatus});return;}
+    if(form.id==='create-resume-form'){
+      const source=state.resumes.find(r=>r.id===values.sourceId);if(!source)throw Error('请选择底稿');
+      const next=clone(state),copy=copyResumeDraft(source,{jobId:values.jobId||'',name:values.name.trim()});if(!copy.name)throw Error('请填写草稿名称');
+      next.resumes.push(copy);await commit(next,{renderView:false});closeModal(true);goToResume({id:copy.id});return;
+    }
+    if(form.id==='resume-submission-form'){if(demo)throw Error('请退出示例后登记正式投递');await submitResumeSubmission(form,{state,commit,render});closeModal(true);return;}
+
     if(form.id==='job-form') {
       const {platform,url,postedDate,...fields}=values;
       if(!fields.title.trim()&&!fields.jd.trim())throw Error('请填写岗位名称或粘贴一段 JD');

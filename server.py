@@ -148,7 +148,7 @@ class Workspace:
         with closing(self.connect()) as conn:
             return conn.execute("SELECT revision FROM workspace WHERE id=1").fetchone()[0]
 
-    def write(self, expected, state):
+    def write(self, expected, state, allow_restore=False):
         validate_state(state)
         body = json.dumps(state, ensure_ascii=False, allow_nan=False)
         with self.connect() as conn:
@@ -156,6 +156,15 @@ class Workspace:
             revision, previous = conn.execute("SELECT revision, body FROM workspace WHERE id=1").fetchone()
             if expected != revision:
                 return None
+            if not allow_restore:
+                old = json.loads(previous)
+                locked = {m['id'] for m in old['materials'] if m.get('isSubmission')}
+                locked.update(mid for j in old['jobs'] for a in j['activities']
+                              if a.get('type') in ('正式投递', '发送简历') for mid in a.get('materialIds', []))
+                incoming = {m['id']: m for m in state['materials']}
+                for material in old['materials']:
+                    if material['id'] in locked and material.get('file') and incoming.get(material['id']) != material:
+                        raise ValueError('已投递原件不能覆盖或删除；请复制草稿或创建新的提交记录')
             conn.execute("INSERT OR REPLACE INTO snapshots VALUES (?, ?)", (revision, previous))
             conn.execute("DELETE FROM snapshots WHERE revision < ?", (max(0, revision - 9),))
             conn.execute("UPDATE workspace SET revision=?, body=? WHERE id=1", (revision + 1, body))
@@ -248,7 +257,7 @@ def handler_for(workspace):
                     self.respond(413, {"error": "文件过大，工作区总大小不能超过 64 MB"})
                     return
                 data = json.loads(self.rfile.read(length))
-                revision = workspace.write(data.get("revision"), data.get("state"))
+                revision = workspace.write(data.get("revision"), data.get("state"), allow_restore=data.get('restore') is True)
                 if revision is None:
                     self.respond(409, {"error": "另一页面已更新记录。请保留当前输入，刷新后重试。"})
                 else:

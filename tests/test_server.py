@@ -72,6 +72,18 @@ class StorageTests(unittest.TestCase):
         state['searchRequests']=[{'id':'search','title':'本轮','directions':'运营','cities':'深圳','salary':'面议','channels':'官网','notes':'','status':'已完成','report':'一条','createdAt':'2026-11-10','updatedAt':'2026-11-10','resultIds':['job']}]
         self.assertEqual(self.workspace.write(0,state),1)
 
+    def test_submitted_files_are_immutable_but_explicit_restore_is_supported(self):
+        state=self.workspace.read()['state']
+        state['materials']=[{'id':'pdf','name':'原件','text':'已投递','kind':'简历','isSubmission':True,'file':{'name':'actual.pdf','data':'data:application/pdf;base64,JVBERi0='}}]
+        self.workspace.write(0,state)
+        changed=copy.deepcopy(state);changed['materials'][0]['file']['data']='data:application/pdf;base64,JVBERi0x'
+        with self.assertRaises(ValueError):self.workspace.write(1,changed)
+        deleted=copy.deepcopy(state);deleted['materials']=[]
+        with self.assertRaises(ValueError):self.workspace.write(1,deleted)
+        self.assertEqual(self.workspace.read()['revision'],1)
+        self.assertEqual(self.workspace.write(1,changed,allow_restore=True),2)
+        self.assertEqual(self.workspace.read()['state'],changed)
+
     def test_http_write_guards_and_static_boundary(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler_for(self.workspace))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
