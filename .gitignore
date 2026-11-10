@@ -1,0 +1,19 @@
+data/
+__pycache__/
+.DS_Store
+*.log
+
+# Local career records and research must never be published.
+artifacts/
+research/
+AI_OPERATIONS_PROFILE.md
+CAREER_EVIDENCE.md
+PORTFOLIO_PLAN.md
+DESIGN.md
+VERIFICATION.md
+*.sqlite3*
+.env
+.env.*
+!.env.example
+*.docx
+*.pdf
