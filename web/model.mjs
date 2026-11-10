@@ -78,6 +78,12 @@ export function stats(jobs) {
 export function validateState(state) {
   if (!state || state.schemaVersion !== 1 || !state.preferences || typeof state.preferences !== 'object' || Array.isArray(state.preferences)) throw Error('不是 Jobcat v1 工作区备份');
   state.searchRequests ??= [];
+  const templates=state.resumeTemplates||[], resumes=state.resumes||[];
+  for(const rows of [templates,resumes]) {
+    if(!Array.isArray(rows)||rows.some(r=>!r||typeof r.id!=='string'||!r.id)||new Set(rows.map(r=>r.id)).size!==rows.length)throw Error('简历版本或母版格式无效');
+  }
+  for(const t of templates)if(typeof t.name!=='string'||typeof t.data!=='string'||!t.data.startsWith('data:')||!Array.isArray(t.slots))throw Error('简历母版缺失');
+  for(const r of resumes)if(!templates.some(t=>t.id===r.templateId)||typeof r.name!=='string'||!r.fields||typeof r.fields!=='object'||Array.isArray(r.fields)||Object.values(r.fields).some(v=>typeof v!=='string'||v.length>16000))throw Error('简历文字或母版关联无效');
   for (const key of ['jobs', 'materials', 'experiences', 'searchRequests']) {
     if (!Array.isArray(state[key])) throw Error(`备份缺少 ${key}`);
     const ids = state[key].map(x => x?.id);

@@ -1,3 +1,4 @@
+import {resumeView,resumeAction,importResume,saveResume} from './resumes.mjs';
 import {STAGES,DIRECTIONS,DECISIONS,RECOMMENDATIONS,recommendation,cityGroup,todayActions,ACTIVITY_TYPES,uid,now,localDate,clone,makeJob,updateJob,addActivity,saveInterview,duplicates,stats,validateState,previewDraft,applyDraft,demoState} from './model.mjs';
 
 const $ = s => document.querySelector(s);
@@ -82,10 +83,10 @@ function render() {
   const count=activeJobs().length;
   $('#app').innerHTML=`<aside class="sidebar"><a class="brand" href="#today" data-action="nav" data-view="today"><img src="./cat.svg" alt=""><span>Jobcat<small>我的求职工作台</small></span></a>
     <div class="workspace-label">个人空间 <span>01</span></div>
-    <nav aria-label="主导航">${[['today','home','今天'],['jobs','grid','机会库'],['search','search','找机会'],['materials','file','材料与经历'],['review','chart','回顾']].map(([key,i,label])=>`<button class="nav-item ${view===key?'active':''}" data-action="nav" data-view="${key}">${icon(i)}<span>${label}</span>${key==='jobs'?`<em>${count}</em>`:''}</button>`).join('')}</nav>
+    <nav aria-label="主导航">${[['today','home','今天'],['jobs','grid','机会库'],['search','search','找机会'],['resumes','file','简历'],['materials','file','材料与经历'],['review','chart','回顾']].map(([key,i,label])=>`<button class="nav-item ${view===key?'active':''}" data-action="nav" data-view="${key}">${icon(i)}<span>${label}</span>${key==='jobs'?`<em>${count}</em>`:''}</button>`).join('')}</nav>
     <div class="sidebar-note"><span class="small-label">当前方向</span><strong>你的求职偏好</strong><p>${esc(state.preferences.directions)}</p><span class="location-dot"></span>${esc(state.preferences.city||'本地')} · 城市不限</div>
     <div class="sidebar-bottom"><button class="nav-item ${view==='settings'?'active':''}" data-action="nav" data-view="settings">${icon('settings')}<span>偏好与数据</span></button><div class="user"><span class="avatar">佳</span><div>我的工作区<small><span class="status-dot"></span>${demo?'示例体验中':'数据保存在本机'}</small></div></div></div></aside>
-    <main>${demo?`<div class="demo-banner"><span>示例模式 · 公司与机会均为虚构，修改不写入正式记录。</span>${btn('退出示例','exit-demo','plain')}</div>`:''}<div class="content">${view==='today'?todayView():view==='jobs'?jobsView():view==='search'?searchView():view==='materials'?materialsView():view==='review'?reviewView():settingsView()}</div><footer>Jobcat <span>·</span> 每个机会，都有下一步。<span class="footer-right">${demo?'示例数据':`本机工作区 · 已保存`}</span></footer></main>`;
+    <main>${demo?`<div class="demo-banner"><span>示例模式 · 公司与机会均为虚构，修改不写入正式记录。</span>${btn('退出示例','exit-demo','plain')}</div>`:''}<div class="content">${view==='today'?todayView():view==='jobs'?jobsView():view==='search'?searchView():view==='resumes'?resumeView(state):view==='materials'?materialsView():view==='review'?reviewView():settingsView()}</div><footer>Jobcat <span>·</span> 每个机会，都有下一步。<span class="footer-right">${demo?'示例数据':`本机工作区 · 已保存`}</span></footer></main>`;
   if(selectedJob) renderDetail();
 }
 function todayView() {
@@ -256,8 +257,10 @@ document.addEventListener('click',async event=>{
   const el=event.target.closest('[data-action]');if(!el)return;
   const action=el.dataset.action;if(busy)return;
   try {
-    if(action==='refresh-state'){if(demo){toast('请先退出示例，再更新正式记录');return;}if($('#overlay form')?.dataset.dirty==='yes'||$('#preferences-form')?.dataset.dirty==='yes'){toast('请先保存或取消当前输入，再更新记录');return;}const res=await fetch('/api/state');if(!res.ok)throw Error('读取记录失败');const fresh=await res.json();state=validateState(fresh.state);revision=fresh.revision;$('#update-notice')?.remove();render();toast('已读取最新记录');}
+    if(action.startsWith('cv-')){await resumeAction(action,el,{state,commit,render,toast,demo});return;}
+    if(action==='refresh-state'){if(demo){toast('请先退出示例，再更新正式记录');return;}if($('#overlay form')?.dataset.dirty==='yes'||$('#preferences-form')?.dataset.dirty==='yes'||$('#resume-form')?.dataset.dirty==='yes'){toast('请先保存或取消当前输入，再更新记录');return;}const res=await fetch('/api/state');if(!res.ok)throw Error('读取记录失败');const fresh=await res.json();state=validateState(fresh.state);revision=fresh.revision;$('#update-notice')?.remove();render();toast('已读取最新记录');}
     else if(action==='nav'||['jobs','settings','pending','filter-direction'].includes(action)) {
+      if($('#resume-form')?.dataset.dirty==='yes'&&!confirm('简历有未保存修改，确定离开吗？'))return;
       view=action==='nav'?el.dataset.view:action==='settings'?'settings':'jobs';
       if(action==='pending')filterStage='待判断'; if(action==='filter-direction')filterDirection=el.dataset.direction;
       selectedJob=null;dialog=null;$('#overlay').innerHTML='';document.body.classList.remove('modal-open');render();window.scrollTo(0,0);
@@ -311,14 +314,15 @@ document.addEventListener('click',async event=>{
   } catch(error){toast(error.message,true);}
 });
 document.addEventListener('input',event=>{
-  event.target.closest('#overlay form, #preferences-form')?.setAttribute('data-dirty','yes');
+  event.target.closest('#overlay form, #preferences-form, #resume-form')?.setAttribute('data-dirty','yes');
   if(event.target.id==='search'){const start=event.target.selectionStart;search=event.target.value;render();const field=$('#search');field.focus();field.setSelectionRange(start,start);}
 });
 document.addEventListener('change',async event=>{
   const el=event.target;
-  el.closest('#overlay form, #preferences-form')?.setAttribute('data-dirty','yes');
+  el.closest('#overlay form, #preferences-form, #resume-form')?.setAttribute('data-dirty','yes');
   try {
-    if(el.name==='type'&&el.closest('#activity-form')){$('#activity-offer').hidden=el.value!=='Offer';}
+    if(el.id==='cv-template-file'){await importResume(el.files[0],{state,commit});}
+    else if(el.name==='type'&&el.closest('#activity-form')){$('#activity-offer').hidden=el.value!=='Offer';}
     else if(el.id==='direction-filter'){filterDirection=el.value;render();}
     else if(el.id==='city-filter'){filterCity=el.value;render();}
     else if(el.id==='recommendation-filter'){filterRecommendation=el.value;render();}
@@ -343,6 +347,7 @@ document.addEventListener('submit',async event=>{
   const data=new FormData(form), values=Object.fromEntries(data.entries()), ids=data.getAll('materialIds');
   const submit=form.querySelector('[type="submit"]');if(submit)submit.disabled=true;
   try {
+    if(form.id==='resume-form'){await saveResume({state,commit});return;}
     if(form.id==='job-form') {
       const {platform,url,postedDate,...fields}=values;
       if(!fields.title.trim()&&!fields.jd.trim())throw Error('请填写岗位名称或粘贴一段 JD');
@@ -387,3 +392,5 @@ async function init() {
   catch(error){$('#app').innerHTML=`<div class="startup-error"><img src="./cat.svg" alt="Jobcat"><h1>暂时无法打开工作区</h1><p>${esc(error.message)}</p><p>请确认本机 Jobcat 服务仍在运行，再刷新页面。你的数据库不会被重置。</p><button class="btn primary" id="retry">重新连接</button></div>`;$('#retry').addEventListener('click',init);}
 }
 init();
+
+window.addEventListener('beforeunload',event=>{if(document.querySelector('#resume-form')?.dataset.dirty==='yes'){event.preventDefault();event.returnValue='';}});
