@@ -191,7 +191,7 @@ export async function submitResumeSubmission(form,ctx){
 function readDataUrl(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(Error('读取PDF失败'));r.readAsDataURL(blob);});}
 function setupDock(){
  dockObserver?.disconnect();const dock=document.querySelector('.cv-dock'),layout=document.querySelector('.cv-layout');if(!dock||!layout)return;
- const update=()=>{if(!dock.isConnected)return;const top=Math.max(20,layout.getBoundingClientRect().top),height=Math.max(100,window.innerHeight-top-dock.getBoundingClientRect().height-40);layout.style.setProperty('--cv-panel-height',height+'px');};
+ const update=()=>{if(!dock.isConnected)return;const editor=layout.querySelector('.cv-editor'),rect=editor.getBoundingClientRect(),top=Math.max(20,layout.getBoundingClientRect().top);dock.style.left=rect.left+'px';dock.style.width=rect.width+'px';const available=Math.max(160,window.innerHeight-top-16);layout.style.setProperty('--cv-preview-height',available+'px');layout.style.setProperty('--cv-panel-height',Math.max(100,available-dock.getBoundingClientRect().height-16)+'px');};
  update();dockObserver=new ResizeObserver(update);dockObserver.observe(dock);const header=document.querySelector('.page-header');if(header)dockObserver.observe(header);
 }
 window.addEventListener('resize',()=>{if(document.querySelector('.cv-dock'))setupDock();});

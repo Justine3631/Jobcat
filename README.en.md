@@ -70,7 +70,7 @@ Archiving stores a job without removing its history. Archived jobs participate i
 
 Import your own DOCX template (up to 10 MB), duplicate it, edit its text slots, and optionally link it to a job. After you pause typing, the editor generates a preview of the actual PDF. Save text to persist a version, or download the PDF. Previewing does not overwrite saved text. The master is read-only in the UI. Downloading saves and exports a snapshot of the content at the time you clicked. Edits typed during export remain in the form and are marked unsaved. Changes to text or the template invalidate and refresh the old preview. Longer text may add pages; fonts are not automatically shrunk.
 
-The resume list supports search by name, company, or role and filters for drafts, master templates, submitted originals, and archived drafts. Job details link directly to their resumes. A separate fixed bottom action bar stays available while scrolling, with space reserved above it for editing and preview.
+The resume list supports search by name, company, or role and filters for drafts, master templates, submitted originals, and archived drafts. Job details link directly to their resumes. A separate fixed bottom action bar stays available while scrolling, only below the left editing column, leaving the right PDF preview at full height.
 
 After confirming an application was actually sent, register its submitted PDF. Originals are read-only; create a separate follow-up draft for later edits. Applications without a confirmed file show a missing-original entry; adding the file does not create another application. Explicit full-backup restoration can restore originals, while ordinary edits cannot overwrite or delete them.
 
