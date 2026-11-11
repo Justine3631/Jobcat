@@ -11,7 +11,7 @@ Each installation has its own workspace. Sharing the source code does not share 
 ## Features
 
 - **Opportunities:** employer, title, location, salary, original links, JD history, and information completeness.
-- **Progress:** personal decisions, application stages, weekly focus, next actions, and due dates. Defer and resume follow-up; deferred or declined jobs stop daily action prompts while existing interviews remain visible.
+- **Progress:** personal decisions, application stages, weekly focus, next actions, and due dates. Deferred jobs move to a separate follow-up view and return to the opportunity library when resumed. Deferred or declined jobs stop daily action prompts while existing interviews remain visible.
 - **History:** conversations, actual applications, interview rounds, offers, and linked material versions.
 - **AI collaboration:** saved search briefs, context export, and previewed JSON analysis imports. AI advice is separate from your decisions.
 - **Portable data:** full JSON backup and restore, plus fictional demo data isolated from your real workspace.
