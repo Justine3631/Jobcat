@@ -63,6 +63,15 @@ def validate_state(state):
     state.setdefault('searchRequests', [])
     jobs, materials, experiences, requests = [collection(k) for k in ('jobs', 'materials', 'experiences', 'searchRequests')]
     job_ids, material_ids = {j['id'] for j in jobs}, {m['id'] for m in materials}
+    if 'interviewQuestions' in state:
+        for index, question in enumerate(collection('interviewQuestions')):
+            path = f'interviewQuestions[{index}]'
+            strings(question, ('title','question','answer','notes','source','review','status','jobId','updatedAt'), path, True)
+            if question['jobId'] and question['jobId'] not in job_ids:
+                fail(path + '.jobId', '岗位不存在')
+            if question['status'] not in ('待准备','待补事实','练习中','已练习'):
+                fail(path + '.status', '练习状态无效')
+            dates(question, ('updatedAt',), path)
     for index, request in enumerate(requests):
         path = f'searchRequests[{index}]'
         strings(request, ('title','directions','cities','salary','channels','notes','status','report','createdAt','updatedAt'), path, True)

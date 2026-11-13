@@ -86,6 +86,11 @@ export function stats(jobs) {
 export function validateState(state) {
   if (!state || state.schemaVersion !== 1 || !state.preferences || typeof state.preferences !== 'object' || Array.isArray(state.preferences)) throw Error('不是 Jobcat v1 工作区备份');
   state.searchRequests ??= [];
+  if(state.interviewQuestions!==undefined){
+    const rows=state.interviewQuestions;
+    if(!Array.isArray(rows)||rows.some(q=>!q||typeof q.id!=='string'||!q.id)||new Set(rows.map(q=>q.id)).size!==rows.length)throw Error('面试题库ID无效');
+    for(const q of rows)if(['title','question','answer','notes','source','review','status','jobId','updatedAt'].some(k=>typeof q[k]!=='string')||!['待准备','待补事实','练习中','已练习'].includes(q.status)||(q.jobId&&!state.jobs.some(j=>j.id===q.jobId)))throw Error('面试题库字段或岗位关联无效');
+  }
   const templates=state.resumeTemplates||[], resumes=state.resumes||[];
   for(const rows of [templates,resumes]) {
     if(!Array.isArray(rows)||rows.some(r=>!r||typeof r.id!=='string'||!r.id)||new Set(rows.map(r=>r.id)).size!==rows.length)throw Error('简历版本或母版格式无效');

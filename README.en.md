@@ -13,6 +13,7 @@ Each installation has its own workspace. Sharing the source code does not share 
 - **Opportunities:** employer, title, location, salary, original links, JD history, and information completeness.
 - **Progress:** personal decisions, application stages, weekly focus, next actions, and due dates. Deferred jobs move to a separate follow-up view and return to the opportunity library when resumed. Deferred or declined jobs stop daily action prompts while existing interviews remain visible.
 - **History:** conversations, actual applications, interview rounds, offers, and linked material versions.
+- **Interview bank:** searchable, job-linked questions with editable answers, preparation notes, source references, practice status, and reflections. Private answers stay in local workspace backups and are excluded from public source code.
 - **AI collaboration:** saved search briefs, context export, and previewed JSON analysis imports. AI advice is separate from your decisions.
 - **Portable data:** full JSON backup and restore, plus fictional demo data isolated from your real workspace.
 - **Desktop web:** desktop browsers are the current verification priority. Cross-device access and sync are not configured.

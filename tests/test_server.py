@@ -41,6 +41,18 @@ class StorageTests(unittest.TestCase):
             self.workspace.write(0, invalid)
         self.assertEqual(self.workspace.read()["revision"], 0)
 
+    def test_question_bank_persists_and_rejects_broken_job_reference(self):
+        state = self.workspace.read()['state']
+        question = dict(id='q1', jobId='', title='介绍自己', question='Tell me about yourself',
+                        answer='Draft', notes='', source='', review='', status='待准备', updatedAt='2026-11-13T12:00:00Z')
+        state['interviewQuestions'] = [question]
+        self.assertEqual(self.workspace.write(0, state), 1)
+        self.assertEqual(Workspace(self.path).read()['state']['interviewQuestions'], [question])
+        question['jobId'] = 'missing'
+        with self.assertRaises(ValueError):
+            self.workspace.write(1, state)
+        self.assertEqual(self.workspace.read()['revision'], 1)
+
     def test_invalid_collections_dates_and_references_do_not_write(self):
         original = self.workspace.read()['state']
         job = {'id':'job','title':'运营','stage':'待判断','revision':1,
